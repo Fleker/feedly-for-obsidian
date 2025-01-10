@@ -251,5 +251,15 @@ class FeedlySettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings(this.settings)
 				})
 			})
+
+			new Setting(containerEl)
+				.setName('Create a developer access token')
+				.addButton((component) => {
+					component.setButtonText('Connect')
+					component.onClick(() => {
+						const feedlyDevUrl = 'https://feedly.com/v3/auth/dev'
+						window.location.href = feedlyDevUrl
+					})
+				})
 	}
 }
