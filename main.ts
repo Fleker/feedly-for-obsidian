@@ -5,6 +5,8 @@ interface FeedlySettings {
 	accessToken?: string
 	/** Timestamp of last sync. Used for querying. */
 	lastSync?: number
+	/** Stores the last time when a full sync began. */
+	continuationTime?: number
 	/** Save this token for continue sync if it was disrupted for some reason (API rate limit) */
 	continuationToken?: string
 	/** Path for folder to save all these files */
@@ -137,7 +139,11 @@ export default class FeedlyPlugin extends Plugin {
 
 				let entryCounter = 0
 				let continuationToken = this.settings.continuationToken ?? undefined
-				const syncStartTime = Date.now()
+				if (!continuationToken) {
+					// Beginning a full, multi-step sync
+					this.settings.continuationTime = Date.now()
+					await this.saveSettings(this.settings)
+				}
 				new Notice('Beginning to download Feedly annotations')
 
 				const folderName = this.settings.annotationsFolder ?? 'Feedly Annotations'
@@ -171,8 +177,8 @@ export default class FeedlyPlugin extends Plugin {
 						await processAnnotations(res.entries)
 						if (res.count < 100) {
 							console.debug(`only got ${res.count} entries`)
-							this.settings.continuationToken = continuationToken
-							this.settings.lastSync = syncStartTime
+							this.settings.continuationToken = undefined // Reset
+							this.settings.lastSync = this.settings.continuationTime
 							this.saveSettings(this.settings)
 							new Notice('All Feedly annotations synced')
 							break
