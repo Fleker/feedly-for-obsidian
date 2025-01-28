@@ -127,7 +127,7 @@ export default class FeedlyPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'sync',
-			name: 'Sync Annotated Articles',
+			name: 'Sync annotated articles',
 			callback: async () => {
 				await this.loadSettings()
 				if (!this.settings.userId) {
@@ -229,7 +229,7 @@ class FeedlySettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Feedly User ID')
+			.setName('Feedly user id')
 			.addText((component) => {
 				component.setValue(this.settings.userId ?? '')
 				component.onChange(async (value) => {
@@ -239,7 +239,7 @@ class FeedlySettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName('Access Token')
+			.setName('Access token')
 			.addText((component) => {
 				component.setValue(this.settings.accessToken ?? '')
 				component.onChange(async (value) => {
@@ -249,7 +249,7 @@ class FeedlySettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName('Sync Directory')
+			.setName('Sync directory')
 			.addText((component) => {
 				component.setValue(this.settings.annotationsFolder ?? '')
 				component.onChange(async (value) => {
