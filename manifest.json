@@ -1,7 +1,7 @@
 {
 	"id": "feedly-annotations",
 	"name": "Feedly Annotations Sync",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"minAppVersion": "1.4.16",
 	"description": "Syncs Feedly highlights and annotations to a folder in your vault.",
 	"author": "Nick Felker",

@@ -159,6 +159,7 @@ export default class FeedlyPlugin extends Plugin {
 						const filename = `${sanitizedFileName}.md`
 						const path = normalizePath(`${folderName}/${filename}`)
 						let obsidianFile = this.app.vault.getFileByPath(path)
+						// console.log(path)
 						if (!obsidianFile) {
 							// Add the frontmatter
 							obsidianFile = await this.app.vault.create(path, getInitialContent(e))
@@ -168,11 +169,13 @@ export default class FeedlyPlugin extends Plugin {
 						entryCounter++
 					}
 				}
+				// console.log(this.settings.continuationTime, this.settings.continuationToken, this.settings.lastSync)
 
 				while (true) {
 					try {
 						const res = await getAnnotations(this.settings.accessToken, continuationToken, this.settings.lastSync)
-						if (!res?.continuation) break // Exit out
+						// console.log('res', res?.count, res?.continuation)
+						if (res === undefined) break
 						continuationToken = res.continuation
 						await processAnnotations(res.entries)
 						if (res.count < 100) {
@@ -267,5 +270,19 @@ class FeedlySettingTab extends PluginSettingTab {
 						window.location.href = feedlyDevUrl
 					})
 				})
+
+		// containerEl.createEl("h2", { text: "Debug" });
+
+		// new Setting(containerEl)
+		// 		.setName("lastSync")
+		// 		.addText(text => text.setValue(this.settings.lastSync?.toString() ?? ''));
+
+		// new Setting(containerEl)
+		// .setName("continuationTime")
+		// .addText(text => text.setValue(this.settings.continuationTime?.toString() ?? ''));
+
+		// new Setting(containerEl)
+		// .setName("continuationToken")
+		// .addText(text => text.setValue(this.settings.continuationToken?.toString() ?? ''));
 	}
 }
