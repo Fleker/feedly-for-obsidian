@@ -353,7 +353,8 @@ export default class FeedlyPlugin extends Plugin {
 				const contents = articlesToExport
                     .map(x => {
                     let data = 
-    `<pre>---${x.canonicalUrl ? `
+    `<h2>${x.title}</h2>
+<pre>---${x.canonicalUrl ? `
 url: ${x.canonicalUrl}` : ''}
 feedlyUrl: https://feedly.com/i/entry/${x.id}
 title: ${x.title}
