@@ -341,7 +341,8 @@ export default class FeedlyPlugin extends Plugin {
 
 				function getContent(article: any) {
     				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent
-					return articleContent.replace(/\<img .*\>/g, '')
+					// return articleContent.replace(/\<img .*\>/g, '')
+					return articleContent
 				}
 				const articlesToExport = articles
 					.filter(x => getContent(x) !== undefined)
@@ -391,6 +392,21 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                 new Notice(`Generated ${filePath}.epub with ${articlesToExport.length} articles`)
 			}
 		})
+
+        this.addCommand({
+            id: 'cleanup',
+            name: 'Delete all Feedly epub files',
+            callback: async () => {
+                const files = this.app.vault.getFiles(); // Get all files in the vault
+
+                for (const file of files) {
+                    if ((file.extension === 'epub') && file.basename.startsWith('FeedlySync')) {
+                        console.log(file.basename)
+                        await this.app.vault.trash(file, true); // Move to system trash
+                    }
+                }
+            }
+        })
 
 		this.addSettingTab(new FeedlySettingTab(this.app, this));
 	}

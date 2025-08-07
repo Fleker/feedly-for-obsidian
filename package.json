@@ -21,8 +21,8 @@
 		"typescript": "5.7.2"
 	},
 	"dependencies": {
-		"nodepub": "^3.2.1",
 		"jszip": "^3.10.1",
+		"nodepub": "github:fleker/nodepub",
 		"process": "^0.11.10"
 	},
 	"overrides": {
