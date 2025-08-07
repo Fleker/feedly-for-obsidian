@@ -11,6 +11,25 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
+// --- START: Custom esbuild plugin for 'process/' import ---
+const fixProcessImportPlugin = {
+  name: 'fix-process-import', // A unique name for your plugin
+  setup(build) {
+    // This hook runs when esbuild tries to resolve a module path.
+    // The filter /^process\/?$/ matches 'process' or 'process/'
+    build.onResolve({ filter: /^(process|string_decoder)\/?$/ }, args => {
+      // Check if it's an actual require or import statement
+      if (args.kind === 'require-call' || args.kind === 'import-statement') {
+        // If it is, tell esbuild to resolve it to the Node.js built-in 'process'
+        // and mark it as external (meaning, don't bundle it, assume it's available globally)
+        return { path: 'process', external: true };
+      }
+      return null; // Let other resolvers handle it if it doesn't match our criteria
+    });
+  },
+};
+// --- END: Custom esbuild plugin ---
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
@@ -31,6 +50,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
+		'process',
 		...builtins],
 	format: "cjs",
 	target: "es2018",
@@ -38,6 +58,8 @@ const context = await esbuild.context({
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
 	outfile: "main.js",
+	platform: "node",
+	plugins: [fixProcessImportPlugin]
 });
 
 if (prod) {

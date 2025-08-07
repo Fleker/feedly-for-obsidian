@@ -1,4 +1,6 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, normalizePath, requestUrl } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl } from 'obsidian';
+const nodepub = require('nodepub')
+const JSZip = require('jszip')
 
 interface FeedlySettings {
 	userId?: string
@@ -40,7 +42,8 @@ const DEFAULT_SETTINGS: FeedlySettings = {
 
 const apiCall = async (accessToken: string, path: string, method = 'GET', data?: any) => {
  	console.debug(`https://cloud.feedly.com/v3/${path}`)
-	try {
+	console.debug(method, data)
+    try {
 		const res = await requestUrl({
 			url: `https://cloud.feedly.com/v3/${path}`,
 			method,
@@ -48,10 +51,10 @@ const apiCall = async (accessToken: string, path: string, method = 'GET', data?:
 				Authorization: `Bearer ${accessToken}`,
 				Accept: 'application/json',
 			},
-			body: data ?? undefined
+			body: JSON.stringify(data) ?? undefined
 		})
-  	return res.json
-	} catch (e) {
+  	    return res.json
+    } catch (e) {
 		console.debug(e)
 		throw new Error(e)
 	}
@@ -117,6 +120,87 @@ async function getAnnotations(accessToken: string, continuation?: string, syncTi
 			throw new Error('API rate limit reached')
 		}
 	}
+}
+
+async function getSavedLater(accessToken: string) {
+    console.log('access', accessToken)
+    const articles: any[] = []
+    const m = await apiCall(accessToken, 'markers/tags') as {taggedEntries: Record<string, any[]>}
+    console.log(m)
+    const globalSaved: string = Object.keys(m.taggedEntries).filter(x => x.includes('global.saved'))[0]
+    const entries = m.taggedEntries[globalSaved] as any[]
+    const entryRes = await apiCall(accessToken, 'entries/.mget', 'POST', entries) as any[]
+    articles.push(...entryRes)
+    return articles
+}
+
+interface GenerateEpubParams {
+    id: string
+    title: string
+    publisher: string
+    author: string
+    cover: string
+    content: {
+        title: string
+        data: string
+    }[]
+    filePath: string
+}
+
+async function generateEpub(params: GenerateEpubParams): Promise<string> {
+    const bookFile = nodepub.document({
+        id: params.id,
+        title: params.title,
+        publisher: params.publisher,
+        author: params.author,
+        cover: params.cover,
+    })
+    for (const c of params.content) {
+        bookFile.addSection(c.title, c.data)
+    }
+    const files = await bookFile.getFilesForEPUB()
+
+    // 3. Initialize JSZip
+    const zip = new JSZip();
+
+    // 4. Add mimetype first and uncompressed
+    console.log(files)
+    const mimetypeFile = files.find((file: any) => file.name === 'mimetype');
+    if (mimetypeFile) {
+        zip.file(mimetypeFile.name, mimetypeFile.data, { compression: 'STORE' });
+    }
+
+    // 5. Add all other files
+    const folders: Record<string, any> = {
+        'META-INF': zip.folder('META-INF'),
+        'OEBPF': zip.folder('OEBPF'),
+    }
+    folders['OEBPF/css'] = folders['OEBPF'].folder('css')
+    folders['OEBPF/content'] = folders['OEBPF'].folder('content')
+    folders['OEBPF/images'] = folders['OEBPF'].folder('images')
+
+    for (const file of files) {
+        if (file.name !== 'mimetype') {
+            if (file.folder !== '') {
+                console.log('    ', file.folder, file.name, file.content.length)
+                folders[file.folder].file(file.name, file.content);
+            } else {
+                console.log('    ', file.name, file.content.length)
+                zip.file(`${file.folder}/${file.name}`, file.content);
+            }
+        }
+    }
+
+    // 6. Generate the final EPUB Buffer
+    const epubBuffer = await zip.generateAsync({ type: 'nodebuffer', mimeType: 'application/epub+zip' });
+
+    // 9. Convert Node.js Buffer to ArrayBuffer for Obsidian's createBinary
+    // This is crucial as Obsidian's API expects ArrayBuffer, not Node.js Buffer
+    const arrayBuffer = epubBuffer.buffer.slice(epubBuffer.byteOffset, epubBuffer.byteOffset + epubBuffer.byteLength);
+
+    // 10. Save the EPUB file to the vault
+    const newFile: TFile = await this.app.vault.createBinary(`${params.filePath}.epub`, arrayBuffer);
+    return newFile.path
 }
 
 export default class FeedlyPlugin extends Plugin {
@@ -202,6 +286,109 @@ export default class FeedlyPlugin extends Plugin {
 				}
 				new Notice(`Synced ${entryCounter} annotations`)
 			},
+		})
+
+		this.addCommand({
+			id: 'epub',
+			name: 'Generate ePub',
+			callback: async () => {
+				const filePath = `FeedlySync-${Date.now()}`
+                console.debug(`Starting file ${filePath}`)
+				const includeImages = false
+				const articles: any[] = []
+  				let continuation: string | undefined = undefined
+
+				if (!this.settings.userId) {
+					return new Notice('Missing Feedly user id')
+				}
+				if (!this.settings.accessToken) {
+					return new Notice('Missing Feedly access token')
+				}
+				const userId = this.settings.userId
+				const accessToken = this.settings.accessToken
+
+				while (true) {
+					const query = continuation ? `&continuation=${continuation}` : ''
+					try {
+                        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/category/global.all&unreadOnly=true&count=250${query}`) as {items: any[], continuation?: string}
+                        const items = res.items
+                        if (!items) {
+                            console.error('err', res)
+                            return
+                        }
+                        continuation = res.continuation
+                        articles.push(...items)
+                        if (items.length < 250) break
+                    } catch (e) {
+                        console.error(e)
+                        if (e.message.includes('status 401')) {
+                            console.error('Access token expired', e)
+                            console.log(continuation)
+                            return new Notice('Access token expired, request a new one')
+                        }
+                        if (e.message.includes('status 429')) {
+                            console.error('API rate limit reached', e)
+                            console.log(continuation)
+                            return new Notice('API rate limit reached')
+                        }
+                    }
+				}
+				console.log(articles.length, 'items')
+
+				const savedArticles = await getSavedLater(accessToken)
+				console.log(savedArticles.length, 'saved items')
+				articles.push(...savedArticles)
+
+				function getContent(article: any) {
+    				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent
+					return articleContent.replace(/\<img .*\>/g, '')
+				}
+				const articlesToExport = articles
+					.filter(x => getContent(x) !== undefined)
+				console.log(articlesToExport.length, 'filter-items')
+
+				const contents = articlesToExport
+                    .map(x => {
+                    let data = 
+    `<pre>---${x.canonicalUrl ? `
+url: ${x.canonicalUrl}` : ''}
+feedlyUrl: https://feedly.com/i/entry/${x.id}
+title: ${x.title}
+pubDate: ${dateToJournal(new Date(x.published ?? x.crawled))}
+author: ${sanitizeFrontmatter(x.author ?? x.origin.title)}${x.origin?.title ? `
+publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
+---</pre>
+
+`
+                    if (getContent(x)) {
+                    data += `
+                        <div>
+                        ${getContent(x)}
+                        </div>
+                    `
+                    }
+
+                    return {
+                        title: x.title,
+                        author: x.author,
+                        data,
+                        css: "img { display: none; width: 0px; height: 0px; }"
+                    }
+                })
+
+                const newPath = await generateEpub({
+                    id: '123-567',
+                    title: `Your Evening Discourse for ${new Date().toDateString()}`,
+                    publisher: 'Quillcast',
+                    author: 'Evening Discourse',
+                    cover: `${this.app.vault.adapter.basePath}/.obsidian/plugins/feedly-annotations/node_modules/nodepub/test/test-cover.png`,
+                    content: contents,
+                    filePath,
+                })
+                console.log(`EPUB file saved to: ${newPath}`);
+
+                new Notice(`Generated ${filePath}.epub with ${articlesToExport.length} articles`)
+			}
 		})
 
 		this.addSettingTab(new FeedlySettingTab(this.app, this));
