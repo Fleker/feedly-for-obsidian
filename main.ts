@@ -376,12 +376,13 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                     }
                 })
 
+                const adapter = this.app.vault.adapter as any
                 const newPath = await generateEpub({
                     id: '123-567',
                     title: `Your Evening Discourse for ${new Date().toDateString()}`,
                     publisher: 'Quillcast',
                     author: 'Evening Discourse',
-                    cover: `${this.app.vault.adapter.basePath}/.obsidian/plugins/feedly-annotations/node_modules/nodepub/test/test-cover.png`,
+                    cover: `${adapter.basePath}/.obsidian/plugins/feedly-annotations/node_modules/nodepub/test/test-cover.png`,
                     content: contents,
                     filePath,
                 })
