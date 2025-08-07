@@ -139,7 +139,7 @@ interface GenerateEpubParams {
     title: string
     publisher: string
     author: string
-    cover: string
+    cover?: string
     content: {
         title: string
         data: string
@@ -155,8 +155,10 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
         author: params.author,
         cover: params.cover,
     })
+    bookFile.addCSS(`img { display: none; width: 0px; height: 0px }`)
+    let i = 0
     for (const c of params.content) {
-        bookFile.addSection(c.title, c.data)
+        bookFile.addSection(`${++i}. ${c.title}`, c.data)
     }
     const files = await bookFile.getFilesForEPUB()
 
@@ -383,7 +385,6 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                     title: `Your Evening Discourse for ${new Date().toDateString()}`,
                     publisher: 'Quillcast',
                     author: 'Evening Discourse',
-                    cover: `${adapter.basePath}/.obsidian/plugins/feedly-annotations/node_modules/nodepub/test/test-cover.png`,
                     content: contents,
                     filePath,
                 })
