@@ -22,7 +22,7 @@
 	},
 	"dependencies": {
 		"jszip": "^3.10.1",
-		"nodepub": "github:fleker/nodepub",
+		"nodepub": "github:fleker/nodepub#master",
 		"process": "^0.11.10"
 	},
 	"overrides": {
