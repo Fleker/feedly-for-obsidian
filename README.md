@@ -38,3 +38,16 @@ publisher: IEEE Spectrum
 The `date` refers to the date of the annotations whereas `pubDate` is the actual date of publication.
 
 This plugin could use your feedback and help to make it a success!
+
+## EPub Generation
+
+For offline reading, you can use Obsidian to generate an ePub file which
+contains every unread article (and every saved item no older than a month).
+This file will be located in your main directory with the file pattern
+`FeedlySync-(Timestamp).epub`.
+
+Every article becomes its own chapter in the file. Images are removed from this
+file to keep the filesize low.
+
+You can use the command palette to generate a new Feedly ePub file or delete
+all of the Feedly Sync ePub files currently in your vault.
