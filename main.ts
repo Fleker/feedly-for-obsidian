@@ -194,13 +194,9 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
     }
 
     // 6. Generate the final EPUB Buffer
-    const epubBuffer = await zip.generateAsync({ type: 'nodebuffer', mimeType: 'application/epub+zip' });
+    const arrayBuffer = await zip.generateAsync({ type: 'arraybuffer', mimeType: 'application/epub+zip' });
 
-    // 9. Convert Node.js Buffer to ArrayBuffer for Obsidian's createBinary
-    // This is crucial as Obsidian's API expects ArrayBuffer, not Node.js Buffer
-    const arrayBuffer = epubBuffer.buffer.slice(epubBuffer.byteOffset, epubBuffer.byteOffset + epubBuffer.byteLength);
-
-    // 10. Save the EPUB file to the vault
+    // 7. Save the EPUB file to the vault
     const newFile: TFile = await this.app.vault.createBinary(`${params.filePath}.epub`, arrayBuffer);
     return newFile.path
 }
@@ -308,6 +304,7 @@ export default class FeedlyPlugin extends Plugin {
 				}
 				const userId = this.settings.userId
 				const accessToken = this.settings.accessToken
+                new Notice('Beginning to download articles...')
 
 				while (true) {
 					const query = continuation ? `&continuation=${continuation}` : ''
@@ -343,8 +340,8 @@ export default class FeedlyPlugin extends Plugin {
 
 				function getContent(article: any) {
     				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent
-					// return articleContent.replace(/\<img .*\>/g, '')
-					return articleContent
+					return articleContent.replace(/\<img .*?>/g, '')
+					// return articleContent
 				}
 				const articlesToExport = articles
 					.filter(x => getContent(x) !== undefined)
@@ -380,7 +377,6 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                     }
                 })
 
-                const adapter = this.app.vault.adapter as any
                 const newPath = await generateEpub({
                     id: '123-567',
                     title: `Your Evening Discourse for ${new Date().toDateString()}`,
