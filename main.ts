@@ -339,8 +339,8 @@ export default class FeedlyPlugin extends Plugin {
 				articles.push(...savedArticles)
 
 				function getContent(article: any) {
-    				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent
-					return articleContent.replace(/\<img .*?>/g, '')
+    				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent ?? ''
+  					return articleContent.replace(/\<img .*?>/g, '')
 					// return articleContent
 				}
 				const articlesToExport = articles
