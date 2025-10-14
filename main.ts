@@ -334,9 +334,14 @@ export default class FeedlyPlugin extends Plugin {
 				}
 				console.log(articles.length, 'items')
 
-				const savedArticles = await getSavedLater(accessToken)
-				console.log(savedArticles.length, 'saved items')
-				articles.push(...savedArticles)
+				try {
+					const savedArticles = await getSavedLater(accessToken)
+					console.log(savedArticles.length, 'saved items')
+					articles.push(...savedArticles)
+				} catch (e) {
+					console.error(e)
+					new Notice(`Error fetching saved articles ${e}`)
+				}
 
 				function getContent(article: any) {
     				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent ?? ''
