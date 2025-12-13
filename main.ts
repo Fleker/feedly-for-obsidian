@@ -81,6 +81,12 @@ publisher: ${sanitizeFrontmatter(entry.entry.origin.title)}` : ''}
 }
 
 function getAppendContent(entry: FeedlyAnnotatedEntry) {
+  if (!entry.annotation) {
+    console.warn('No append content for', entry.entry.title)
+	console.warn(entry)
+	return ``
+  }
+
   if (entry.annotation.highlight) {
     return `
 
@@ -241,10 +247,31 @@ export default class FeedlyPlugin extends Plugin {
 						const filename = `${sanitizedFileName}.md`
 						const path = normalizePath(`${folderName}/${filename}`)
 						let obsidianFile = this.app.vault.getFileByPath(path)
-						// console.log(path)
+						console.log(path, obsidianFile)
 						if (!obsidianFile) {
 							// Add the frontmatter
-							obsidianFile = await this.app.vault.create(path, getInitialContent(e))
+							try {
+								obsidianFile = await this.app.vault.create(path, getInitialContent(e))
+							} catch (error) {
+								if (error.message.includes('File already exists')) {
+									// This is a situation which can happen if
+									// two files have the same name BUT
+									// different case sensitivity. So it would
+									// fail a filename lookup check BUT would
+									// also fail creating the file.
+									// To fix this, we will generate a unique
+									// filename.
+									console.warn(error)
+									const appendedId = e.entry.id.replace(/[*"\/<>:|?]/g, '')
+									const uniqueFilename = `${sanitizedFileName}-${appendedId}.md`
+									const uniquePath = normalizePath(`${folderName}/${uniqueFilename}`)
+									console.warn(`use path ${uniquePath}`)
+									obsidianFile = this.app.vault.getFileByPath(uniquePath)
+									if (!obsidianFile) {
+										obsidianFile = await this.app.vault.create(uniquePath, getInitialContent(e))
+									}
+								}
+							}
 						}
 						// Add the highlight or comment of this entry
 						await this.app.vault.append(obsidianFile!, getAppendContent(e))
