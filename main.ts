@@ -371,9 +371,17 @@ export default class FeedlyPlugin extends Plugin {
 				}
 
 				function getContent(article: any) {
-    				const articleContent = article.content?.content ?? article.summary?.content ?? article.fullContent ?? ''
-  					return articleContent.replace(/\<img .*?>/g, '')
-					// return articleContent
+          const contents = [
+            article?.content?.content,
+            article?.summary?.content,
+            article?.fullContent,
+          ].filter(Boolean) as string[]; // Filter out undefined/null and assert as string[]
+
+          if (contents.length > 0) {
+            // Sort by length in descending order and pick the first one
+            return contents.sort((a, b) => b.length - a.length)[0]
+              .replace(/<img .*?>/g, ''); // Remove <img> tags
+          }
 				}
 				const articlesToExport = articles
 					.filter(x => getContent(x) !== undefined)
