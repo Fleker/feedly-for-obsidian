@@ -13,6 +13,8 @@ interface FeedlySettings {
 	continuationToken?: string
 	/** Path for folder to save all these files */
 	annotationsFolder?: string
+	/** Comma-separated list of publishers to exclude from epub generation */
+	filteredPublishers?: string
 }
 
 interface FeedlyAnnotatedEntry {
@@ -383,8 +385,16 @@ export default class FeedlyPlugin extends Plugin {
               .replace(/<img .*?>/g, ''); // Remove <img> tags
           }
 				}
+				const blockedPublishers = (this.settings.filteredPublishers ?? '')
+					.split(',')
+					.map(p => p.trim().toLowerCase())
+					.filter(p => p.length > 0)
 				const articlesToExport = articles
 					.filter(x => getContent(x) !== undefined)
+					.filter(x => {
+						const publisher = (x.origin?.title ?? '').toLowerCase()
+						return !blockedPublishers.some(p => publisher.includes(p))
+					})
 				console.log(articlesToExport.length, 'filter-items')
 
 				const contents = articlesToExport
@@ -502,6 +512,18 @@ class FeedlySettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings(this.settings)
 				})
 			})
+
+			new Setting(containerEl)
+				.setName('Filtered publishers')
+				.setDesc('Comma-separated list of publishers to exclude from epub generation (e.g. "The Guardian, BBC News")')
+				.addText((component) => {
+					component.setPlaceholder('Publisher A, Publisher B')
+					component.setValue(this.settings.filteredPublishers ?? '')
+					component.onChange(async (value) => {
+						this.settings.filteredPublishers = value
+						await this.plugin.saveSettings(this.settings)
+					})
+				})
 
 			new Setting(containerEl)
 				.setName('Create a developer access token')
