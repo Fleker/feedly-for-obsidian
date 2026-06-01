@@ -15,6 +15,10 @@ interface FeedlySettings {
 	annotationsFolder?: string
 	/** Comma-separated list of publishers to exclude from epub generation */
 	filteredPublishers?: string
+	instapaperConsumerKey?: string
+	instapaperConsumerSecret?: string
+	instapaperUsername?: string
+	instapaperPassword?: string
 }
 
 interface FeedlyAnnotatedEntry {
@@ -130,18 +134,144 @@ async function getAnnotations(accessToken: string, continuation?: string, syncTi
 	}
 }
 
-async function getSavedLater(accessToken: string) {
-    console.log('access', accessToken)
+async function getSavedLater(accessToken: string, userId: string) {
     const articles: any[] = []
-    const m = await apiCall(accessToken, 'markers/tags') as {taggedEntries: Record<string, any[]>}
-    console.log(m)
-    const globalSaved: string = Object.keys(m.taggedEntries).filter(x => x.includes('global.saved'))[0]
-    const entries = m.taggedEntries[globalSaved] as any[]
-    const entryRes = await apiCall(accessToken, 'entries/.mget', 'POST', entries) as any[]
-    articles.push(...entryRes)
+    let continuation: string | undefined = undefined
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000)
+
+    while (true) {
+        const query = continuation ? `&continuation=${continuation}` : ''
+        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/tag/global.saved&count=250${query}`) as {items: any[], continuation?: string}
+        
+        if (!res.items || res.items.length === 0) break
+        
+        // Filter items that are newer than 30 days
+        const recentItems = res.items.filter(item => {
+            const publishedAt = item.published ?? item.crawled ?? 0
+            return publishedAt > thirtyDaysAgo
+        })
+        
+        articles.push(...recentItems)
+		articles.forEach(a => {
+			console.log(getContent(a))
+		})
+        
+        // If some items in this batch were older than 30 days, we can stop fetching entirely
+        // since the stream is generally returned in reverse-chronological order.
+        if (recentItems.length < res.items.length) {
+            break
+        }
+
+        continuation = res.continuation
+        if (!continuation) break
+    }
     return articles
 }
 
+async function getInstapaperArticles(
+	consumerKey: string,
+	consumerSecret: string,
+	username: string,
+	password: string,
+): Promise<{ title: string, data: string }[]> {
+	const Instapaper = require('instapaper-node-sdk')
+	const client = new Instapaper(consumerKey, consumerSecret)
+	client.setCredentials(username, password)
+	await client.verifyCredentials()
+	
+	const bookmarks = await client.list({ limit: 500 })
+	if (!bookmarks || !Array.isArray(bookmarks)) {
+		return []
+	}
+
+	const out: { title: string, data: string }[] = []
+	let skippedCount = 0
+	for (let i = 0; i < bookmarks.length; i++) {
+		const b = bookmarks[i]
+		if (b.type !== 'bookmark') continue
+		const { bookmark_id, url, title } = b
+		if (!bookmark_id || !title) continue
+		try {
+			const content = await client.request('/bookmarks/get_text', { bookmark_id: `${bookmark_id}` }, '1.1')
+			const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
+			// console.log(b)
+			const data = `<h2>${title}</h2>
+<pre>---
+url: ${url}
+instapaperUrl: https://www.instapaper.com/read/${bookmark_id}
+title: ${title}
+saveDate: ${saveDate}
+source: Instapaper${b.description ? `
+description: ${sanitizeFrontmatter(b.description)}` : ''}
+---</pre>
+<div>${content}</div>`
+			out.push({ title, data })
+		} catch (e) {
+			const errorMsg = e.message || e.toString()
+			if (errorMsg.includes('1550')) {
+				console.warn(`Instapaper: Unable to parse text for "${title}" (1550). This article will be skipped.`)
+			} else {
+				console.error(`Instapaper: Unexpected error fetching "${title}":`, e)
+			}
+			skippedCount++
+		}
+		if (i % 50 === 49) {
+			new Notice(`Instapaper Progress: ${i + 1}/${bookmarks.length}`)
+		}
+	}
+
+	if (skippedCount > 0) {
+		new Notice(`Instapaper: ${skippedCount} articles skipped due to parsing errors.`)
+	}
+	return out
+}
+
+function cleanContent(html: string) {
+	if (!html) return html;
+
+	let content = html;
+
+	// 1. Remove preheaders and display:none blocks which often contain preview text we don't want in the body
+	content = content.replace(/<div[^>]*display\s*:\s*none[^>]*>[\s\S]*?<\/div>/gi, '');
+
+	// 2. Remove known ad and social blocks
+	content = content.replace(/<div[^>]*data-block="(top-ad|ad|social)"[^>]*>[\s\S]*?<\/div>/gi, '');
+
+	// 3. Remove "View in browser" links and similar noise
+	content = content.replace(/<a[^>]*>[^<]*View in browser[^<]*<\/a>/gi, '');
+	content = content.replace(/<a[^>]*>[^<]*View on [^<]*<\/a>/gi, '');
+
+	// 4. Flatten Tables
+	// We replace table tags with nothing, and td/tr with divs to keep the flow
+	for (let i = 0; i < 3; i++) {
+		content = content
+			.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, '$1')
+			.replace(/<tbody[^>]*>([\s\S]*?)<\/tbody>/gi, '$1')
+			.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, '<div>$1</div>')
+			.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '<div>$1</div>');
+	}
+
+	// 5. Strip overly complex inline styles that interfere with e-reader rendering
+	content = content.replace(/style="[^"]{40,}"/gi, '');
+
+	// 6. Final cleanup
+	return content
+		.replace(/<img .*?>/g, '') // Remove images
+		.replace(/<div>\s*<\/div>/gi, '') // Remove empty divs
+		.trim();
+}
+function getContent(article: any) {
+	const contents = [
+		article?.content?.content,
+		article?.summary?.content,
+		article?.fullContent,
+	].filter(Boolean) as string[]; // Filter out undefined/null and assert as string[]
+
+	if (contents.length > 0) {
+		// Sort by length in descending order and pick the first one
+		return cleanContent(contents.sort((a, b) => b.length - a.length)[0])
+	}
+}
 interface GenerateEpubParams {
     id: string
     title: string
@@ -364,7 +494,7 @@ export default class FeedlyPlugin extends Plugin {
 				console.log(articles.length, 'items')
 
 				try {
-					const savedArticles = await getSavedLater(accessToken)
+					const savedArticles = await getSavedLater(accessToken, userId)
 					console.log(savedArticles.length, 'saved items')
 					articles.push(...savedArticles)
 				} catch (e) {
@@ -372,19 +502,6 @@ export default class FeedlyPlugin extends Plugin {
 					new Notice(`Error fetching saved articles ${e}`)
 				}
 
-				function getContent(article: any) {
-          const contents = [
-            article?.content?.content,
-            article?.summary?.content,
-            article?.fullContent,
-          ].filter(Boolean) as string[]; // Filter out undefined/null and assert as string[]
-
-          if (contents.length > 0) {
-            // Sort by length in descending order and pick the first one
-            return contents.sort((a, b) => b.length - a.length)[0]
-              .replace(/<img .*?>/g, ''); // Remove <img> tags
-          }
-				}
 				const blockedPublishers = (this.settings.filteredPublishers ?? '')
 					.split(',')
 					.map(p => p.trim().toLowerCase())
@@ -427,6 +544,29 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                     }
                 })
 
+				let totalArticles = articlesToExport.length
+				// Include Instapaper articles if credentials are configured
+				if (this.settings.instapaperConsumerKey &&
+					this.settings.instapaperConsumerSecret &&
+					this.settings.instapaperUsername &&
+					this.settings.instapaperPassword) {
+					try {
+						new Notice('Fetching Instapaper articles...')
+						const instapaperContents = await getInstapaperArticles(
+							this.settings.instapaperConsumerKey,
+							this.settings.instapaperConsumerSecret,
+							this.settings.instapaperUsername,
+							this.settings.instapaperPassword,
+						)
+						contents.push(...instapaperContents)
+						totalArticles += instapaperContents.length
+						console.log(instapaperContents.length, 'instapaper articles added')
+					} catch (e) {
+						console.error(e)
+						new Notice(`Error fetching Instapaper articles: ${e}`)
+					}
+				}
+
                 const newPath = await generateEpub({
                     id: '123-567',
                     title: `Your Evening Discourse for ${new Date().toDateString()}`,
@@ -437,7 +577,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                 })
                 console.log(`EPUB file saved to: ${newPath}`);
 
-                new Notice(`Generated ${filePath}.epub with ${articlesToExport.length} articles`)
+                new Notice(`Generated ${filePath}.epub with ${totalArticles} articles`)
 			}
 		})
 
@@ -534,6 +674,50 @@ class FeedlySettingTab extends PluginSettingTab {
 						window.location.href = feedlyDevUrl
 					})
 				})
+
+		containerEl.createEl('h3', { text: 'Instapaper (optional)' })
+
+		new Setting(containerEl)
+			.setName('Instapaper consumer key')
+			.setDesc('OAuth consumer key from your Instapaper API application')
+			.addText((component) => {
+				component.setValue(this.settings.instapaperConsumerKey ?? '')
+				component.onChange(async (value) => {
+					this.settings.instapaperConsumerKey = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			})
+
+		new Setting(containerEl)
+			.setName('Instapaper consumer secret')
+			.addText((component) => {
+				component.setValue(this.settings.instapaperConsumerSecret ?? '')
+				component.onChange(async (value) => {
+					this.settings.instapaperConsumerSecret = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			})
+
+		new Setting(containerEl)
+			.setName('Instapaper username')
+			.addText((component) => {
+				component.setValue(this.settings.instapaperUsername ?? '')
+				component.onChange(async (value) => {
+					this.settings.instapaperUsername = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			})
+
+		new Setting(containerEl)
+			.setName('Instapaper password')
+			.addText((component) => {
+				component.inputEl.type = 'password'
+				component.setValue(this.settings.instapaperPassword ?? '')
+				component.onChange(async (value) => {
+					this.settings.instapaperPassword = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			})
 
 		// containerEl.createEl("h2", { text: "Debug" });
 
