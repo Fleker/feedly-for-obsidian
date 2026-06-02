@@ -173,7 +173,7 @@ async function getInstapaperArticles(
 	consumerSecret: string,
 	username: string,
 	password: string,
-): Promise<{ title: string, data: string }[]> {
+): Promise<{ title: string, author: string, data: string, css: string }[]> {
 	const Instapaper = require('instapaper-node-sdk')
 	const client = new Instapaper(consumerKey, consumerSecret)
 	client.setCredentials(username, password)
@@ -184,7 +184,7 @@ async function getInstapaperArticles(
 		return []
 	}
 
-	const out: { title: string, data: string }[] = []
+	const out: { title: string, author: string, data: string, css: string }[] = []
 	let skippedCount = 0
 	for (let i = 0; i < bookmarks.length; i++) {
 		const b = bookmarks[i]
@@ -194,18 +194,24 @@ async function getInstapaperArticles(
 		try {
 			const content = await client.request('/bookmarks/get_text', { bookmark_id: `${bookmark_id}` }, '1.1')
 			const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
-			// console.log(b)
+			const author = b.author ?? 'Unknown'
 			const data = `<h2>${title}</h2>
 <pre>---
 url: ${url}
 instapaperUrl: https://www.instapaper.com/read/${bookmark_id}
 title: ${title}
+author: ${author}
 saveDate: ${saveDate}
 source: Instapaper${b.description ? `
 description: ${sanitizeFrontmatter(b.description)}` : ''}
 ---</pre>
 <div>${content}</div>`
-			out.push({ title, data })
+			out.push({ 
+				title, 
+				author, 
+				data, 
+				css: "img { display: none; width: 0px; height: 0px; }" 
+			})
 		} catch (e) {
 			const errorMsg = e.message || e.toString()
 			if (errorMsg.includes('1550')) {
