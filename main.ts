@@ -1,4 +1,5 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl } from 'obsidian';
+import { InstapaperClient } from './instapaper';
 const nodepub = require('nodepub')
 const JSZip = require('jszip')
 
@@ -168,18 +169,41 @@ async function getSavedLater(accessToken: string, userId: string) {
     return articles
 }
 
+async function authorizeInstapaper(client: InstapaperClient, username: string, password: string, consumerKey: string, consumerSecret: string) {
+	try {
+		await client.authenticate(username, password)
+		return true
+	} catch (e) {
+		new Notice(`Error authorizing Instapaper`)
+		console.error(e)
+	}
+	return false
+}
+
+async function getBookmarks(client: InstapaperClient) {
+	try {
+		const bookmarks = await client.getBookmarks(500)
+		return bookmarks
+	} catch (e) {
+		new Notice(`Error fetching Instapaper bookmarks`)
+		console.error(e)
+	}
+	return null
+}
+
 async function getInstapaperArticles(
 	consumerKey: string,
 	consumerSecret: string,
 	username: string,
 	password: string,
 ): Promise<{ title: string, author: string, data: string, css: string }[]> {
-	const Instapaper = require('instapaper-node-sdk')
-	const client = new Instapaper(consumerKey, consumerSecret)
-	client.setCredentials(username, password)
-	await client.verifyCredentials()
-	
-	const bookmarks = await client.list({ limit: 500 })
+	const client = new InstapaperClient(consumerKey, consumerSecret)
+	const authorized = await authorizeInstapaper(client, username, password, consumerKey, consumerSecret)
+	if (!authorized) {
+		return []
+	}
+
+	const bookmarks = await getBookmarks(client)
 	if (!bookmarks || !Array.isArray(bookmarks)) {
 		return []
 	}
@@ -192,7 +216,10 @@ async function getInstapaperArticles(
 		const { bookmark_id, url, title } = b
 		if (!bookmark_id || !title) continue
 		try {
-			const content = await client.request('/bookmarks/get_text', { bookmark_id: `${bookmark_id}` }, '1.1')
+			const content = await client.getText(bookmark_id)
+			if (content === null) {
+				continue
+			}
 			const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
 			const author = b.author ?? 'Unknown'
 			const data = `<h2>${title}</h2>
@@ -229,6 +256,7 @@ description: ${sanitizeFrontmatter(b.description)}` : ''}
 	if (skippedCount > 0) {
 		new Notice(`Instapaper: ${skippedCount} articles skipped due to parsing errors.`)
 	}
+
 	return out
 }
 

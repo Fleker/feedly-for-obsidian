@@ -13,17 +13,19 @@
 	"author": "Nick Felker",
 	"license": "Apache-2.0",
 	"devDependencies": {
+		"@types/crypto-js": "^4.2.2",
 		"@types/node": "^18.0.0",
 		"builtin-modules": "3.3.0",
 		"esbuild": "^0.25.8",
-		"instapaper-node-sdk": "^2.0.1",
 		"obsidian": "latest",
 		"tslib": "2.4.0",
 		"typescript": "5.7.2"
 	},
 	"dependencies": {
+		"crypto-js": "^4.2.0",
 		"jszip": "^3.10.1",
 		"nodepub": "github:fleker/nodepub#master",
+		"oauth-1.0a": "^2.2.6",
 		"process": "^0.11.10"
 	},
 	"overrides": {

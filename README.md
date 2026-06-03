@@ -1,4 +1,4 @@
-# Feedly for Obsidian
+# Feedly Annotations Sync
 
 If you are _a paid member_ of Feedly, you are able to annotate articles and add comments to them as well. Those are all stored in Feedly's web UI. This plugin makes it easy for users to sync these annotations and comments to a folder in Obsidian, with a file created for each article and each file containing as many highlights as you've added.
 
@@ -51,3 +51,6 @@ file to keep the filesize low.
 
 You can use the command palette to generate a new Feedly ePub file or delete
 all of the Feedly Sync ePub files currently in your vault.
+
+When generating ePub files, one can also include Instapaper as a source.
+These articles are appended at the end.
