@@ -1,7 +1,17 @@
 import { Notice, requestUrl, RequestUrlParam } from 'obsidian';
-import OAuth from 'oauth-1.0a';
-import hmacSHA1 from 'crypto-js/hmac-sha1';
-import Base64 from 'crypto-js/enc-base64';
+const OAuth = require('oauth-1.0a');
+const hmacSHA1 = require('crypto-js/hmac-sha1');
+const Base64 = require('crypto-js/enc-base64');
+
+type OAuth = any;
+
+namespace OAuth {
+    export interface Token {
+        key: string;
+        secret: string;
+    }
+    export type RequestOptions = any;
+}
 
 export class InstapaperClient {
     private oauth: OAuth;
@@ -12,7 +22,7 @@ export class InstapaperClient {
         this.oauth = new OAuth({
             consumer: { key: consumerKey, secret: consumerSecret },
             signature_method: 'HMAC-SHA1',
-            hash_function(base_string, key) {
+            hash_function(base_string: string, key: string) {
                 // Instapaper requires HMAC-SHA1 signatures
                 return hmacSHA1(base_string, key).toString(Base64);
             },
