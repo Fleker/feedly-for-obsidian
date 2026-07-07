@@ -197,65 +197,91 @@ async function getInstapaperArticles(
 	username: string,
 	password: string,
 ): Promise<{ title: string, author: string, data: string, css: string }[]> {
+	const progressNotice = new Notice('Fetching Instapaper articles...', 0)
 	const client = new InstapaperClient(consumerKey, consumerSecret)
 	const authorized = await authorizeInstapaper(client, username, password, consumerKey, consumerSecret)
 	if (!authorized) {
+		progressNotice.hide()
 		return []
 	}
 
 	const bookmarks = await getBookmarks(client)
 	if (!bookmarks || !Array.isArray(bookmarks)) {
+		progressNotice.hide()
+		return []
+	}
+
+	const validBookmarks = bookmarks.filter(b => b && b.type === 'bookmark' && b.bookmark_id && b.title)
+	if (validBookmarks.length === 0) {
+		progressNotice.setMessage('Instapaper progress: Done (0 articles)')
 		return []
 	}
 
 	const out: { title: string, author: string, data: string, css: string }[] = []
+	const results: ({ title: string, author: string, data: string, css: string } | null)[] = new Array(validBookmarks.length).fill(null)
 	let skippedCount = 0
-	for (let i = 0; i < bookmarks.length; i++) {
-		const b = bookmarks[i]
-		if (b.type !== 'bookmark') continue
-		const { bookmark_id, url, title } = b
-		if (!bookmark_id || !title) continue
-		try {
-			const content = await client.getText(bookmark_id)
-			if (content === null) {
-				continue
-			}
-			const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
-			const author = b.author ?? 'Unknown'
-			const data = `<h2>${title}</h2>
+	let processedCount = 0
+	progressNotice.setMessage(`Instapaper progress: 0/${validBookmarks.length}`)
+
+	const concurrency = 15
+	let currentIndex = 0
+
+	const worker = async () => {
+		while (currentIndex < validBookmarks.length) {
+			const index = currentIndex++
+			const b = validBookmarks[index]
+			const { bookmark_id, url, title } = b
+			try {
+				const content = await client.getText(bookmark_id)
+				if (content === null) {
+					skippedCount++
+				} else {
+					const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
+					const author = b.author ?? 'Unknown'
+					const data = `<h2>${title}</h2>
 <pre>---
 url: ${url}
 instapaperUrl: https://www.instapaper.com/read/${bookmark_id}
 title: ${title}
-author: ${author}
-saveDate: ${saveDate}
-source: Instapaper${b.description ? `
+saveDate: ${saveDate}${b.description ? `
 description: ${sanitizeFrontmatter(b.description)}` : ''}
 ---</pre>
 <div>${content}</div>`
-			out.push({ 
-				title, 
-				author, 
-				data, 
-				css: "img { display: none; width: 0px; height: 0px; }" 
-			})
-		} catch (e) {
-			const errorMsg = e.message || e.toString()
-			if (errorMsg.includes('1550')) {
-				console.warn(`Instapaper: Unable to parse text for "${title}" (1550). This article will be skipped.`)
-			} else {
-				console.error(`Instapaper: Unexpected error fetching "${title}":`, e)
+					results[index] = { 
+						title, 
+						author, 
+						data, 
+						css: "img { display: none; width: 0px; height: 0px; }" 
+					}
+				}
+			} catch (e) {
+				const errorMsg = e.message || e.toString()
+				if (errorMsg.includes('1550')) {
+					console.warn(`Instapaper: Unable to parse text for "${title}" (1550). This article will be skipped.`)
+				} else {
+					console.error(`Instapaper: Unexpected error fetching "${title}":`, e)
+				}
+				skippedCount++
+			} finally {
+				processedCount++
+				progressNotice.setMessage(`Instapaper progress: ${processedCount}/${validBookmarks.length}`)
 			}
-			skippedCount++
-		}
-		if (i % 50 === 49) {
-			new Notice(`Instapaper Progress: ${i + 1}/${bookmarks.length}`)
 		}
 	}
 
-	if (skippedCount > 0) {
-		new Notice(`Instapaper: ${skippedCount} articles skipped due to parsing errors.`)
+	const workers = []
+	for (let i = 0; i < Math.min(concurrency, validBookmarks.length); i++) {
+		workers.push(worker())
 	}
+	await Promise.all(workers)
+
+	for (const item of results) {
+		if (item !== null) {
+			out.push(item)
+		}
+	}
+
+	progressNotice.setMessage(`Instapaper progress: Done (${out.length}/${validBookmarks.length} articles${skippedCount > 0 ? `, ${skippedCount} skipped` : ''})`)
 
 	return out
 }
@@ -585,7 +611,6 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 					this.settings.instapaperUsername &&
 					this.settings.instapaperPassword) {
 					try {
-						new Notice('Fetching Instapaper articles...')
 						const instapaperContents = await getInstapaperArticles(
 							this.settings.instapaperConsumerKey,
 							this.settings.instapaperConsumerSecret,
@@ -611,7 +636,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                 })
                 console.log(`EPUB file saved to: ${newPath}`);
 
-                new Notice(`Generated ${filePath}.epub with ${totalArticles} articles`)
+                new Notice(`Generated ${filePath}.epub with ${totalArticles} articles`, 0)
 			}
 		})
 
