@@ -28,6 +28,48 @@ const fixProcessImportPlugin = {
     });
   },
 };
+// --- START: Custom esbuild plugin for clean browser polyfills (removing IE/DOM script injection) ---
+const cleanPolyfillsPlugin = {
+  name: 'clean-polyfills',
+  setup(build) {
+    // Intercept 'immediate' and 'setimmediate' imports/requires from jszip/lie
+    build.onResolve({ filter: /^(immediate|setimmediate)$/ }, args => {
+      return { path: args.path, namespace: 'clean-polyfills' };
+    });
+    // Provide clean, modern shims without any script tags or eval/Function
+    build.onLoad({ filter: /.*/, namespace: 'clean-polyfills' }, args => {
+      if (args.path === 'immediate') {
+        return {
+          contents: `module.exports = function immediate(task) {
+  if (typeof setImmediate === 'function') {
+    setImmediate(task);
+  } else {
+    setTimeout(task, 0);
+  }
+};`,
+          loader: 'js'
+        };
+      }
+      if (args.path === 'setimmediate') {
+        return {
+          contents: `if (typeof global !== 'undefined' && typeof global.setImmediate === 'undefined') {
+  global.setImmediate = function(fn, ...args) { return setTimeout(fn, 0, ...args); };
+  global.clearImmediate = function(id) { clearTimeout(id); };
+}
+if (typeof window !== 'undefined' && typeof window.setImmediate === 'undefined') {
+  window.setImmediate = function(fn, ...args) { return setTimeout(fn, 0, ...args); };
+  window.clearImmediate = function(id) { clearTimeout(id); };
+}
+module.exports = {
+  setImmediate: typeof setImmediate !== 'undefined' ? setImmediate : setTimeout,
+  clearImmediate: typeof clearImmediate !== 'undefined' ? clearImmediate : clearTimeout
+};`,
+          loader: 'js'
+        };
+      }
+    });
+  }
+};
 // --- END: Custom esbuild plugin ---
 
 const context = await esbuild.context({
@@ -59,7 +101,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	platform: "node",
-	plugins: [fixProcessImportPlugin]
+	plugins: [fixProcessImportPlugin, cleanPolyfillsPlugin]
 });
 
 if (prod) {
