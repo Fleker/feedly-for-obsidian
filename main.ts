@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
+import { App, FileManager, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
 import { InstapaperClient } from './instapaper';
 import nodepub, { NodepubFile } from 'nodepub';
 import JSZip from 'jszip';
@@ -94,16 +94,21 @@ function dateToJournal(date: Date) {
 	return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
 }
 
-function getInitialContent(entry: FeedlyAnnotatedEntry) {
-  return `---${entry.entry.canonicalUrl ? `
-url: ${entry.entry.canonicalUrl}` : ''}
-feedlyUrl: https://feedly.com/i/entry/${entry.entry.id}
-date: ${dateToJournal(new Date(entry.created))}
-pubDate: ${dateToJournal(new Date(entry.entry.published ?? entry.entry.crawled))}
-author: ${sanitizeFrontmatter(entry.entry.author)}${entry.entry.origin?.title ? `
-publisher: ${sanitizeFrontmatter(entry.entry.origin.title)}` : ''}
----
-`
+async function setEntryFrontmatter(fileManager: FileManager, file: TFile, entry: FeedlyAnnotatedEntry) {
+	await fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+		if (entry.entry.canonicalUrl) {
+			frontmatter.url = entry.entry.canonicalUrl;
+		}
+		frontmatter.feedlyUrl = `https://feedly.com/i/entry/${entry.entry.id}`;
+		frontmatter.date = dateToJournal(new Date(entry.created));
+		frontmatter.pubDate = dateToJournal(new Date(entry.entry.published ?? entry.entry.crawled));
+		if (entry.entry.author) {
+			frontmatter.author = sanitizeFrontmatter(entry.entry.author);
+		}
+		if (entry.entry.origin?.title) {
+			frontmatter.publisher = sanitizeFrontmatter(entry.entry.origin.title);
+		}
+	});
 }
 
 function getAppendContent(entry: FeedlyAnnotatedEntry) {
@@ -464,7 +469,8 @@ export default class FeedlyPlugin extends Plugin {
 						if (!obsidianFile) {
 							// Add the frontmatter
 							try {
-								obsidianFile = await this.app.vault.create(path, getInitialContent(e))
+								obsidianFile = await this.app.vault.create(path, '')
+								await setEntryFrontmatter(this.app.fileManager, obsidianFile, e)
 							} catch (error) {
 								if (error.message.includes('File already exists')) {
 									// This is a situation which can happen if
@@ -481,7 +487,8 @@ export default class FeedlyPlugin extends Plugin {
 									console.warn(`use path ${uniquePath}`)
 									obsidianFile = this.app.vault.getFileByPath(uniquePath)
 									if (!obsidianFile) {
-										obsidianFile = await this.app.vault.create(uniquePath, getInitialContent(e))
+										obsidianFile = await this.app.vault.create(uniquePath, '')
+										await setEntryFrontmatter(this.app.fileManager, obsidianFile, e)
 									}
 								}
 							}
