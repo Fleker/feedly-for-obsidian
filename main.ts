@@ -431,6 +431,40 @@ export default class FeedlyPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		this.registerEvent(
+			this.app.workspace.on('url-menu', (menu, url) => {
+				if (
+					this.settings.instapaperConsumerKey &&
+					this.settings.instapaperConsumerSecret &&
+					this.settings.instapaperUsername &&
+					this.settings.instapaperPassword
+				) {
+					menu.addItem((item) => {
+						item.setTitle('Add to Instapaper')
+							.setIcon('bookmark')
+							.onClick(async () => {
+								new Notice(`Saving ${url} to Instapaper...`);
+								try {
+									const client = new InstapaperClient(
+										this.settings.instapaperConsumerKey!,
+										this.settings.instapaperConsumerSecret!
+									);
+									await client.authenticate(
+										this.settings.instapaperUsername!,
+										this.settings.instapaperPassword!
+									);
+									await client.addBookmark(url);
+									new Notice('Saved to Instapaper!');
+								} catch (error) {
+									console.error('Failed to save to Instapaper:', error);
+									new Notice('Failed to save to Instapaper');
+								}
+							});
+					});
+				}
+			})
+		);
+
 		this.addCommand({
 			id: 'sync',
 			name: 'Sync annotated articles',
