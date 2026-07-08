@@ -735,6 +735,21 @@ class FeedlySettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Sync directory')
+			.setDesc('Select an existing folder or enter a custom folder path below')
+			.addDropdown((dropdown) => {
+				const folders = this.app.vault.getAllFolders(true);
+				for (const folder of folders) {
+					const path = folder.path === '/' ? '' : folder.path;
+					const label = folder.path === '/' ? 'Vault root (/)' : folder.path;
+					dropdown.addOption(path, label);
+				}
+				dropdown.setValue(this.settings.annotationsFolder ?? '');
+				dropdown.onChange(async (value) => {
+					this.settings.annotationsFolder = value;
+					await this.plugin.saveSettings(this.settings);
+					this.display();
+				});
+			})
 			.addText((component) => {
 				component.setValue(this.settings.annotationsFolder ?? '')
 				component.onChange(async (value) => {
