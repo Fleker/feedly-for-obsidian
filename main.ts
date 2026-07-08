@@ -39,6 +39,7 @@ interface FeedlySettings {
 	instapaperConsumerSecret?: string
 	instapaperUsername?: string
 	instapaperPassword?: string
+	instapaperLimit?: number
 }
 
 interface FeedlyAnnotatedEntry {
@@ -204,9 +205,9 @@ async function authorizeInstapaper(client: InstapaperClient, username: string, p
 	return false
 }
 
-async function getBookmarks(client: InstapaperClient) {
+async function getBookmarks(client: InstapaperClient, limit: number = 25) {
 	try {
-		const bookmarks = await client.getBookmarks(500)
+		const bookmarks = await client.getBookmarks(limit)
 		return bookmarks
 	} catch (e) {
 		new Notice(`Error fetching Instapaper bookmarks`)
@@ -220,6 +221,7 @@ async function getInstapaperArticles(
 	consumerSecret: string,
 	username: string,
 	password: string,
+	limit: number = 25,
 ): Promise<{ title: string, author: string, data: string, css: string }[]> {
 	const progressNotice = new Notice('Fetching Instapaper articles...', 0)
 	const client = new InstapaperClient(consumerKey, consumerSecret)
@@ -229,7 +231,7 @@ async function getInstapaperArticles(
 		return []
 	}
 
-	const bookmarks = await getBookmarks(client)
+	const bookmarks = await getBookmarks(client, limit)
 	if (!bookmarks || !Array.isArray(bookmarks)) {
 		progressNotice.hide()
 		return []
@@ -677,6 +679,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 							this.settings.instapaperConsumerSecret,
 							this.settings.instapaperUsername,
 							this.settings.instapaperPassword,
+							this.settings.instapaperLimit ?? 25,
 						)
 						contents.push(...instapaperContents)
 						totalArticles += instapaperContents.length
@@ -857,6 +860,21 @@ class FeedlySettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings(this.settings)
 				})
 			})
+
+		new Setting(containerEl)
+			.setName('Instapaper bookmark limit')
+			.setDesc('Maximum number of unread Instapaper bookmarks to include when generating ePub')
+			.addSlider((slider) => {
+				slider
+					.setLimits(5, 100, 5)
+					.setValue(this.settings.instapaperLimit ?? 25)
+					.setDynamicTooltip()
+					.setInstant(true)
+					.onChange(async (value) => {
+						this.settings.instapaperLimit = value;
+						await this.plugin.saveSettings(this.settings);
+					});
+			});
 
 		// containerEl.createEl("h2", { text: "Debug" });
 
