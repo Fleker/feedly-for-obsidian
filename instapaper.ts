@@ -1,17 +1,7 @@
 import { Notice, requestUrl, RequestUrlParam } from 'obsidian';
-const OAuth = require('oauth-1.0a');
-const hmacSHA1 = require('crypto-js/hmac-sha1');
-const Base64 = require('crypto-js/enc-base64');
-
-type OAuth = any;
-
-namespace OAuth {
-    export interface Token {
-        key: string;
-        secret: string;
-    }
-    export type RequestOptions = any;
-}
+import OAuth from 'oauth-1.0a';
+import hmacSHA1 from 'crypto-js/hmac-sha1';
+import Base64 from 'crypto-js/enc-base64';
 
 export class InstapaperClient {
     private oauth: OAuth;
@@ -120,7 +110,8 @@ export class InstapaperClient {
             const response = await this.executeRequest(requestData);
             return response;
         } catch (e) {
-            new Notice(`Cannot fetch article ${bookmarkId}`)
+            console.error(`Cannot fetch article ${bookmarkId}`, e);
+            new Notice(`Cannot fetch article ${bookmarkId}`);
         }
         return null
     }
@@ -131,7 +122,7 @@ export class InstapaperClient {
     private async executeRequest(requestData: OAuth.RequestOptions, useToken: boolean = true): Promise<string> {
         // Generate the OAuth 1.0a authorization header
         const authorization = this.oauth.authorize(requestData, useToken ? this.token : undefined);
-        const headers = this.oauth.toHeader(authorization) as Record<string, string>;
+        const headers = this.oauth.toHeader(authorization) as unknown as Record<string, string>;
 
         // Convert the JSON data payload into x-www-form-urlencoded format
         const bodyParams = new URLSearchParams();

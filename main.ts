@@ -1,7 +1,26 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
 import { InstapaperClient } from './instapaper';
-const nodepub = require('nodepub')
-const JSZip = require('jszip')
+import nodepub, { NodepubFile } from 'nodepub';
+import JSZip from 'jszip';
+
+interface FeedlyArticle {
+	id: string;
+	title: string;
+	author?: string;
+	canonicalUrl?: string;
+	published?: number;
+	crawled?: number;
+	origin?: {
+		title: string;
+	};
+	content?: {
+		content?: string;
+	};
+	summary?: {
+		content?: string;
+	};
+	fullContent?: string;
+}
 
 interface FeedlySettings {
 	userId?: string
@@ -47,7 +66,7 @@ const DEFAULT_SETTINGS: FeedlySettings = {
 	annotationsFolder: 'Feedly Annotations'
 }
 
-const apiCall = async (accessToken: string, path: string, method = 'GET', data?: any) => {
+const apiCall = async (accessToken: string, path: string, method = 'GET', data?: unknown) => {
  	console.debug(`https://cloud.feedly.com/v3/${path}`)
 	console.debug(method, data)
     try {
@@ -136,13 +155,13 @@ async function getAnnotations(accessToken: string, continuation?: string, syncTi
 }
 
 async function getSavedLater(accessToken: string, userId: string) {
-    const articles: any[] = []
+    const articles: FeedlyArticle[] = []
     let continuation: string | undefined = undefined
     const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000)
 
     while (true) {
         const query = continuation ? `&continuation=${continuation}` : ''
-        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/tag/global.saved&count=250${query}`) as {items: any[], continuation?: string}
+        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/tag/global.saved&count=250${query}`) as {items: FeedlyArticle[], continuation?: string}
         
         if (!res.items || res.items.length === 0) break
         
@@ -320,7 +339,7 @@ function cleanContent(html: string) {
 		.replace(/<div>\s*<\/div>/gi, '') // Remove empty divs
 		.trim();
 }
-function getContent(article: any) {
+function getContent(article: FeedlyArticle) {
 	const contents = [
 		article?.content?.content,
 		article?.summary?.content,
@@ -365,25 +384,27 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
 
     // 4. Add mimetype first and uncompressed
     console.log(files)
-    const mimetypeFile = files.find((file: any) => file.name === 'mimetype');
+    const mimetypeFile = files.find((file: NodepubFile) => file.name === 'mimetype');
     if (mimetypeFile) {
-        zip.file(mimetypeFile.name, mimetypeFile.data, { compression: 'STORE' });
+        zip.file(mimetypeFile.name, mimetypeFile.data ?? mimetypeFile.content, { compression: 'STORE' });
     }
 
     // 5. Add all other files
-    const folders: Record<string, any> = {
+    const folders: Record<string, JSZip | null> = {
         'META-INF': zip.folder('META-INF'),
         'OEBPF': zip.folder('OEBPF'),
     }
-    folders['OEBPF/css'] = folders['OEBPF'].folder('css')
-    folders['OEBPF/content'] = folders['OEBPF'].folder('content')
-    folders['OEBPF/images'] = folders['OEBPF'].folder('images')
+    if (folders['OEBPF']) {
+        folders['OEBPF/css'] = folders['OEBPF'].folder('css')
+        folders['OEBPF/content'] = folders['OEBPF'].folder('content')
+        folders['OEBPF/images'] = folders['OEBPF'].folder('images')
+    }
 
     for (const file of files) {
         if (file.name !== 'mimetype') {
             if (file.folder !== '') {
                 console.log('    ', file.folder, file.name, file.content.length)
-                folders[file.folder].file(file.name, file.content);
+                folders[file.folder]?.file(file.name, file.content);
             } else {
                 console.log('    ', file.name, file.content.length)
                 zip.file(`${file.folder}/${file.name}`, file.content);
@@ -434,8 +455,8 @@ export default class FeedlyPlugin extends Plugin {
 				const processAnnotations = async (entries: FeedlyAnnotatedEntry[]) => {
 					for (const e of entries) {
 						// Remove slashes.
-						// File name cannot contain any of the following characters: * " \ / < > : | ?
-						const sanitizedFileName = e.entry.title.replace(/[*"\/<>:|?]/g, '')
+						// File name cannot contain any of the following characters: * " \ / < > : | ?
+						const sanitizedFileName = e.entry.title.replace(new RegExp('[*"/<>:|?]', 'g'), '')
 						const filename = `${sanitizedFileName}.md`
 						const path = normalizePath(`${folderName}/${filename}`)
 						let obsidianFile = this.app.vault.getFileByPath(path)
@@ -454,7 +475,7 @@ export default class FeedlyPlugin extends Plugin {
 									// To fix this, we will generate a unique
 									// filename.
 									console.warn(error)
-									const appendedId = e.entry.id.replace(/[*"\/<>:|?]/g, '')
+									const appendedId = e.entry.id.replace(new RegExp('[*"/<>:|?]', 'g'), '')
 									const uniqueFilename = `${sanitizedFileName}-${appendedId}.md`
 									const uniquePath = normalizePath(`${folderName}/${uniqueFilename}`)
 									console.warn(`use path ${uniquePath}`)
@@ -483,13 +504,13 @@ export default class FeedlyPlugin extends Plugin {
 							console.debug(`only got ${res.count} entries`)
 							this.settings.continuationToken = undefined // Reset
 							this.settings.lastSync = this.settings.continuationTime
-							this.saveSettings(this.settings)
+							await this.saveSettings(this.settings)
 							new Notice('All Feedly annotations synced')
 							break
 						}
 						this.settings.continuationToken = continuationToken
 						// Save token for the future
-						this.saveSettings(this.settings)
+						await this.saveSettings(this.settings)
 						console.debug(`>    at ${continuationToken} ...`)
 					} catch (e) {
 						if (e.message.includes('API rate limit')) {
@@ -511,8 +532,7 @@ export default class FeedlyPlugin extends Plugin {
 			callback: async () => {
 				const filePath = `FeedlySync-${Date.now()}`
                 console.debug(`Starting file ${filePath}`)
-				const includeImages = false
-				const articles: any[] = []
+				const articles: FeedlyArticle[] = []
   				let continuation: string | undefined = undefined
 
 				if (!this.settings.userId) {
@@ -528,7 +548,7 @@ export default class FeedlyPlugin extends Plugin {
 				while (true) {
 					const query = continuation ? `&continuation=${continuation}` : ''
 					try {
-                        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/category/global.all&unreadOnly=true&count=250${query}`) as {items: any[], continuation?: string}
+                        const res = await apiCall(accessToken, `streams/contents?streamId=user/${userId}/category/global.all&unreadOnly=true&count=250${query}`) as {items: FeedlyArticle[], continuation?: string}
                         const items = res.items
                         if (!items) {
                             console.error('err', res)
@@ -582,8 +602,8 @@ export default class FeedlyPlugin extends Plugin {
 url: ${x.canonicalUrl}` : ''}
 feedlyUrl: https://feedly.com/i/entry/${x.id}
 title: ${x.title}
-pubDate: ${dateToJournal(new Date(x.published ?? x.crawled))}
-author: ${sanitizeFrontmatter(x.author ?? x.origin.title)}${x.origin?.title ? `
+pubDate: ${dateToJournal(new Date(x.published ?? x.crawled ?? 0))}
+author: ${sanitizeFrontmatter(x.author ?? x.origin?.title ?? '')}${x.origin?.title ? `
 publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 ---</pre>
 
@@ -649,7 +669,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
                 for (const file of files) {
                     if ((file.extension === 'epub') && file.basename.startsWith('FeedlySync')) {
                         console.log(file.basename)
-                        await this.app.vault.trash(file, true); // Move to system trash
+                        await this.app.fileManager.trashFile(file);
                     }
                 }
             }
@@ -676,9 +696,13 @@ class FeedlySettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	async display(): Promise<void> {
+	onExternalSettingsChange(): void {
+		this.display();
+	}
+
+	display(): void {
 		const {containerEl} = this;
-		this.settings = await this.plugin.loadData() ?? DEFAULT_SETTINGS
+		this.settings = this.plugin.settings ?? DEFAULT_SETTINGS;
 
 		containerEl.empty();
 
@@ -734,7 +758,7 @@ class FeedlySettingTab extends PluginSettingTab {
 					})
 				})
 
-		containerEl.createEl('h3', { text: 'Instapaper (optional)' })
+		new Setting(containerEl).setName('Instapaper (optional)').setHeading()
 
 		new Setting(containerEl)
 			.setName('Instapaper consumer key')

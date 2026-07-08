@@ -15,9 +15,8 @@
 	"devDependencies": {
 		"@types/crypto-js": "^4.2.2",
 		"@types/node": "^18.0.0",
-		"builtin-modules": "3.3.0",
 		"esbuild": "^0.25.8",
-		"obsidian": "latest",
+		"obsidian": "^1.13.1",
 		"tslib": "2.4.0",
 		"typescript": "5.7.2"
 	},
