@@ -52,18 +52,40 @@ export class InstapaperClient {
     }
 
     /**
-     * Fetch the user's unread bookmarks
+     * Fetch bookmarks for a given folder ('unread', 'starred', 'archive', or a numeric folder_id)
      */
-    async getBookmarks(limit: number = 25) {
+    async getBookmarks(limit: number = 25, folderId?: string | number, have?: string) {
+        const data: Record<string, unknown> = { limit };
+        if (folderId !== undefined) {
+            data.folder_id = folderId;
+        }
+        if (have) {
+            data.have = have;
+        }
         const requestData = {
             url: 'https://www.instapaper.com/api/1/bookmarks/list',
             method: 'POST',
-            data: { limit }
+            data
         };
 
         const responseText = await this.executeRequest(requestData);
         return JSON.parse(responseText);
     }
+
+
+    /**
+     * Fetch user's custom folders
+     */
+    async getFolders() {
+        const requestData = {
+            url: 'https://www.instapaper.com/api/1/folders/list',
+            method: 'POST'
+        };
+
+        const responseText = await this.executeRequest(requestData);
+        return JSON.parse(responseText);
+    }
+
 
     /**
      * Add a new bookmark

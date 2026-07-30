@@ -40,6 +40,7 @@ interface FeedlySettings {
 	instapaperUsername?: string
 	instapaperPassword?: string
 	instapaperLimit?: number
+	instapaperFoldersFileName?: string
 }
 
 interface FeedlyAnnotatedEntry {
@@ -64,8 +65,10 @@ interface FeedlyAnnotatedEntry {
 }
 
 const DEFAULT_SETTINGS: FeedlySettings = {
-	annotationsFolder: 'Feedly Annotations'
+	annotationsFolder: 'Feedly Annotations',
+	instapaperFoldersFileName: 'Instapaper Folders'
 }
+
 
 const apiCall = async (accessToken: string, path: string, method = 'GET', data?: unknown) => {
  	console.debug(`https://cloud.feedly.com/v3/${path}`)
@@ -722,6 +725,140 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
             }
         })
 
+				this.addCommand({
+			id: 'sync-instapaper-folders',
+			name: 'Sync Instapaper folders to Markdown list',
+			callback: async () => {
+				await this.loadSettings();
+				if (
+					!this.settings.instapaperConsumerKey ||
+					!this.settings.instapaperConsumerSecret ||
+					!this.settings.instapaperUsername ||
+					!this.settings.instapaperPassword
+				) {
+					return new Notice('Missing Instapaper credentials in settings');
+				}
+
+				const progressNotice = new Notice('Syncing Instapaper folders...', 0);
+				try {
+					const client = new InstapaperClient(
+						this.settings.instapaperConsumerKey,
+						this.settings.instapaperConsumerSecret
+					);
+					const authorized = await authorizeInstapaper(
+						client,
+						this.settings.instapaperUsername,
+						this.settings.instapaperPassword,
+						this.settings.instapaperConsumerKey,
+						this.settings.instapaperConsumerSecret
+					);
+					if (!authorized) {
+						progressNotice.hide();
+						return;
+					}
+
+					// Fetch custom folders from Instapaper
+					const folderListRes = await client.getFolders().catch(() => []);
+					const customFolders = Array.isArray(folderListRes)
+						? folderListRes.filter((f: any) => f && f.type === 'folder' && f.folder_id && f.title)
+						: [];
+
+					const foldersToSync: { id: string | number; title: string }[] = customFolders.map((f: any) => ({
+						id: f.folder_id,
+						title: f.title
+					}));
+
+
+					let markdownContent = `# Instapaper Saved Articles\n\n*Last synced: ${new Date().toLocaleString()}*\n\n`;
+					let totalArticles = 0;
+
+					for (const folder of foldersToSync) {
+						progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title}...`);
+						const bookmarks: any[] = [];
+						const haveIds: string[] = [];
+
+						while (true) {
+							const response = await client.getBookmarks(500, folder.id, haveIds.join(',')).catch(e => {
+								console.error(`Error fetching folder ${folder.title}:`, e);
+								return null;
+							});
+
+							if (!response || !Array.isArray(response)) break;
+
+							const pageBookmarks = response.filter((b: any) => b && b.type === 'bookmark' && b.title && b.title.trim().length > 0);
+							if (pageBookmarks.length === 0) break;
+
+							let newCount = 0;
+							for (const b of pageBookmarks) {
+								const bIdStr = String(b.bookmark_id);
+								if (b.bookmark_id && !haveIds.includes(bIdStr)) {
+									haveIds.push(bIdStr);
+									bookmarks.push(b);
+									newCount++;
+								}
+							}
+
+							progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title} (${bookmarks.length} articles)...`);
+
+							if (newCount === 0 || pageBookmarks.length < 500) break;
+						}
+
+						if (bookmarks.length === 0) continue;
+
+						markdownContent += `## ${folder.title}\n\n`;
+						for (const b of bookmarks) {
+							if (!b.title || !b.title.trim()) continue;
+							totalArticles++;
+							const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown';
+							const title = b.title.trim();
+							const originalUrl = b.url || '';
+							const instapaperUrl = b.bookmark_id
+								? `https://www.instapaper.com/read/${b.bookmark_id}`
+								: originalUrl;
+
+							markdownContent += `- [${title}](${instapaperUrl})\n`;
+
+							markdownContent += `  - **Saved**: ${saveDate}\n`;
+							if (originalUrl) {
+								markdownContent += `  - **Original URL**: [${originalUrl}](${originalUrl})\n`;
+							}
+							if (b.author) {
+								markdownContent += `  - **Author**: ${sanitizeFrontmatter(b.author)}\n`;
+							}
+							if (b.description) {
+								markdownContent += `  - **Description**: ${sanitizeFrontmatter(b.description)}\n`;
+							}
+						}
+						markdownContent += `\n`;
+					}
+
+
+					const folderName = this.settings.annotationsFolder ?? 'Feedly Annotations';
+					const doesFolderExist = this.app.vault.getFolderByPath(folderName);
+					if (!doesFolderExist) {
+						await this.app.vault.createFolder(folderName);
+					}
+
+					const fileName = (this.settings.instapaperFoldersFileName || 'Instapaper Folders').trim();
+					const filePath = normalizePath(`${folderName}/${fileName}.md`);
+
+					const obsidianFile = this.app.vault.getFileByPath(filePath);
+					if (obsidianFile) {
+						await this.app.vault.modify(obsidianFile, markdownContent);
+					} else {
+						await this.app.vault.create(filePath, markdownContent);
+					}
+
+					progressNotice.hide();
+					new Notice(`Synced ${totalArticles} articles across Instapaper folders to ${filePath}`);
+				} catch (e: any) {
+					console.error('Error syncing Instapaper folders:', e);
+					progressNotice.hide();
+					new Notice(`Error syncing Instapaper folders: ${e.message || e}`);
+				}
+			}
+		});
+
 		this.addSettingTab(new FeedlySettingTab(this.app, this));
 	}
 
@@ -878,6 +1015,18 @@ class FeedlySettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings(this.settings);
 					});
 			});
+
+		new Setting(containerEl)
+			.setName('Instapaper folders filename')
+			.setDesc('Name of the Markdown file (without .md extension) where Instapaper folders will be synced')
+			.addText((component) => {
+				component.setValue(this.settings.instapaperFoldersFileName ?? 'Instapaper Folders')
+				component.onChange(async (value) => {
+					this.settings.instapaperFoldersFileName = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			});
+
 
 		// containerEl.createEl("h2", { text: "Debug" });
 
