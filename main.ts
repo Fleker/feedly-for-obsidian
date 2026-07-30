@@ -708,14 +708,17 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
             id: 'cleanup',
             name: 'Delete all Feedly epub files',
             callback: async () => {
-                const files = this.app.vault.getFiles(); // Get all files in the vault
+                const deletePromises = []
+								const files = this.app.vault.getFiles(); // Get all files in the vault
 
                 for (const file of files) {
                     if ((file.extension === 'epub') && file.basename.startsWith('FeedlySync')) {
                         console.log(file.basename)
-                        await this.app.fileManager.trashFile(file);
+                        deletePromises.push(this.app.fileManager.trashFile(file));
                     }
                 }
+								await Promise.all(deletePromises)
+								new Notice(`Deleted ${deletePromises.length} files`)
             }
         })
 
