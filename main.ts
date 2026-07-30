@@ -41,7 +41,9 @@ interface FeedlySettings {
 	instapaperPassword?: string
 	instapaperLimit?: number
 	instapaperFoldersFileName?: string
+	feedlyCategoriesFileName?: string
 }
+
 
 interface FeedlyAnnotatedEntry {
 	annotation: {
@@ -66,8 +68,10 @@ interface FeedlyAnnotatedEntry {
 
 const DEFAULT_SETTINGS: FeedlySettings = {
 	annotationsFolder: 'Feedly Annotations',
-	instapaperFoldersFileName: 'Instapaper Folders'
+	instapaperFoldersFileName: 'Instapaper Folders',
+	feedlyCategoriesFileName: 'Feedly Categories'
 }
+
 
 
 const apiCall = async (accessToken: string, path: string, method = 'GET', data?: unknown) => {
@@ -97,6 +101,117 @@ function sanitizeFrontmatter(v: string = '') {
 function dateToJournal(date: Date) {
 	return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
 }
+
+/**
+ * Represents a single article entry to be rendered in a synced Markdown list.
+ */
+
+interface SyncedArticleItem {
+	/** Title of the article. */
+	title: string;
+	/** Primary URL used for the main article link (e.g. reader link or entry link). */
+	primaryUrl: string;
+	/** Formatted date string (e.g., YYYY-MM-DD). */
+	date?: string;
+	/** Custom label for the date field (e.g., "Saved" or "Published"). Overrides group and default settings if provided. */
+	dateLabel?: string;
+	/** Direct URL to the original source web page. */
+	originalUrl?: string;
+	/** Name of the publisher or origin feed. */
+	publisher?: string;
+	/** Author of the article. */
+	author?: string;
+	/** Brief summary or description of the article. */
+	description?: string;
+}
+
+/**
+ * Represents a logical grouping of articles (e.g., an Instapaper folder or Feedly category).
+ */
+interface SyncedArticleGroup {
+	/** Section header title for this group (e.g., "Tech" or "Starred"). */
+	groupTitle: string;
+	/** Default date label for all articles within this group (e.g., "Saved" or "Published"). */
+	dateLabel?: string;
+	/** List of articles belonging to this group. */
+	articles: SyncedArticleItem[];
+}
+
+/**
+ * Generates a formatted Markdown document string containing grouped article lists.
+ *
+ * @param headerTitle - Top-level document title (e.g., "Instapaper Saved Articles").
+ * @param groups - Array of article groups containing group titles and article items.
+ * @param defaultDateLabel - Fallback label for date metadata if not specified per item or group (defaults to "Saved").
+ * @returns Object containing the formatted Markdown string and the total count of rendered articles.
+ */
+function generateGroupedArticlesMarkdown(
+	headerTitle: string,
+	groups: SyncedArticleGroup[],
+	defaultDateLabel: string = 'Saved'
+): { content: string; totalArticles: number } {
+	let markdownContent = `# ${headerTitle}\n\n*Last synced: ${new Date().toLocaleString()}*\n\n`;
+	let totalArticles = 0;
+
+	for (const group of groups) {
+		const validArticles = (group.articles || []).filter(a => a && a.title && a.title.trim());
+		if (validArticles.length === 0) continue;
+
+		markdownContent += `## ${group.groupTitle}\n\n`;
+		const groupDateLabel = group.dateLabel || defaultDateLabel;
+		for (const a of validArticles) {
+			totalArticles++;
+			const title = a.title.trim();
+			markdownContent += `- [${title}](${a.primaryUrl})\n`;
+			if (a.date) {
+				const label = a.dateLabel || groupDateLabel;
+				markdownContent += `  - **${label}**: ${a.date}\n`;
+			}
+			if (a.originalUrl) {
+				markdownContent += `  - **Original URL**: [${a.originalUrl}](${a.originalUrl})\n`;
+			}
+			if (a.publisher) {
+				markdownContent += `  - **Publisher**: ${sanitizeFrontmatter(a.publisher)}\n`;
+			}
+			if (a.author) {
+				markdownContent += `  - **Author**: ${sanitizeFrontmatter(a.author)}\n`;
+			}
+			if (a.description) {
+				markdownContent += `  - **Description**: ${sanitizeFrontmatter(a.description)}\n`;
+			}
+		}
+		markdownContent += `\n`;
+	}
+
+	return { content: markdownContent, totalArticles };
+}
+
+/**
+ * Saves or updates a Markdown document in the specified vault folder.
+ *
+ * @param app - The Obsidian App instance.
+ * @param folderName - Target folder directory in the vault.
+ * @param fileName - Target Markdown file name (without `.md` extension).
+ * @param content - Markdown content to write to the file.
+ * @returns The normalized path of the written file.
+ */
+async function saveSyncedMarkdownFile(app: App, folderName: string, fileName: string, content: string): Promise<string> {
+	const doesFolderExist = app.vault.getFolderByPath(folderName);
+	if (!doesFolderExist) {
+		await app.vault.createFolder(folderName);
+	}
+
+	const filePath = normalizePath(`${folderName}/${fileName.trim()}.md`);
+	const obsidianFile = app.vault.getFileByPath(filePath);
+	if (obsidianFile) {
+		await app.vault.modify(obsidianFile, content);
+	} else {
+		await app.vault.create(filePath, content);
+	}
+	return filePath;
+}
+
+
 
 async function setEntryFrontmatter(fileManager: FileManager, file: TFile, entry: FeedlyAnnotatedEntry) {
 	await fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
@@ -768,13 +883,11 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 						title: f.title
 					}));
 
-
-					let markdownContent = `# Instapaper Saved Articles\n\n*Last synced: ${new Date().toLocaleString()}*\n\n`;
-					let totalArticles = 0;
+					const articleGroups: SyncedArticleGroup[] = [];
 
 					for (const folder of foldersToSync) {
 						progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title}...`);
-						const bookmarks: any[] = [];
+						const rawBookmarks: any[] = [];
 						const haveIds: string[] = [];
 
 						while (true) {
@@ -793,61 +906,36 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 								const bIdStr = String(b.bookmark_id);
 								if (b.bookmark_id && !haveIds.includes(bIdStr)) {
 									haveIds.push(bIdStr);
-									bookmarks.push(b);
+									rawBookmarks.push(b);
 									newCount++;
 								}
 							}
 
-							progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title} (${bookmarks.length} articles)...`);
+							progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title} (${rawBookmarks.length} articles)...`);
 
 							if (newCount === 0 || pageBookmarks.length < 500) break;
 						}
 
-						if (bookmarks.length === 0) continue;
+						if (rawBookmarks.length === 0) continue;
 
-						markdownContent += `## ${folder.title}\n\n`;
-						for (const b of bookmarks) {
-							if (!b.title || !b.title.trim()) continue;
-							totalArticles++;
-							const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown';
-							const title = b.title.trim();
-							const originalUrl = b.url || '';
-							const instapaperUrl = b.bookmark_id
-								? `https://www.instapaper.com/read/${b.bookmark_id}`
-								: originalUrl;
+						const articles: SyncedArticleItem[] = rawBookmarks.map((b: any) => ({
+							title: b.title.trim(),
+							primaryUrl: b.bookmark_id ? `https://www.instapaper.com/read/${b.bookmark_id}` : (b.url || ''),
+							date: b.time ? dateToJournal(new Date(b.time * 1000)) : undefined,
+							originalUrl: b.url || undefined,
+							author: b.author || undefined,
+							description: b.description || undefined
+						}));
 
-							markdownContent += `- [${title}](${instapaperUrl})\n`;
-
-							markdownContent += `  - **Saved**: ${saveDate}\n`;
-							if (originalUrl) {
-								markdownContent += `  - **Original URL**: [${originalUrl}](${originalUrl})\n`;
-							}
-							if (b.author) {
-								markdownContent += `  - **Author**: ${sanitizeFrontmatter(b.author)}\n`;
-							}
-							if (b.description) {
-								markdownContent += `  - **Description**: ${sanitizeFrontmatter(b.description)}\n`;
-							}
-						}
-						markdownContent += `\n`;
+						articleGroups.push({ groupTitle: folder.title, articles });
 					}
+
+					const { content: markdownContent, totalArticles } = generateGroupedArticlesMarkdown('Instapaper Saved Articles', articleGroups, 'Saved');
 
 
 					const folderName = this.settings.annotationsFolder ?? 'Feedly Annotations';
-					const doesFolderExist = this.app.vault.getFolderByPath(folderName);
-					if (!doesFolderExist) {
-						await this.app.vault.createFolder(folderName);
-					}
-
-					const fileName = (this.settings.instapaperFoldersFileName || 'Instapaper Folders').trim();
-					const filePath = normalizePath(`${folderName}/${fileName}.md`);
-
-					const obsidianFile = this.app.vault.getFileByPath(filePath);
-					if (obsidianFile) {
-						await this.app.vault.modify(obsidianFile, markdownContent);
-					} else {
-						await this.app.vault.create(filePath, markdownContent);
-					}
+					const fileName = this.settings.instapaperFoldersFileName || 'Instapaper Folders';
+					const filePath = await saveSyncedMarkdownFile(this.app, folderName, fileName, markdownContent);
 
 					progressNotice.hide();
 					new Notice(`Synced ${totalArticles} articles across Instapaper folders to ${filePath}`);
@@ -858,6 +946,90 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 				}
 			}
 		});
+
+		this.addCommand({
+			id: 'sync-feedly-categories',
+			name: 'Sync Feedly categories to Markdown list',
+			callback: async () => {
+				await this.loadSettings();
+				if (!this.settings.userId) {
+					return new Notice('Missing Feedly user id');
+				}
+				if (!this.settings.accessToken) {
+					return new Notice('Missing Feedly access token');
+				}
+
+				const progressNotice = new Notice('Fetching Feedly categories...', 0);
+				try {
+					const categories: { id: string; label: string }[] = await apiCall(
+						this.settings.accessToken,
+						'categories'
+					);
+
+					if (!categories || !Array.isArray(categories) || categories.length === 0) {
+						progressNotice.hide();
+						return new Notice('No Feedly categories found');
+					}
+
+					const articleGroups: SyncedArticleGroup[] = [];
+
+					for (const cat of categories) {
+						const label = cat.label || 'Uncategorized';
+						progressNotice.setMessage(`Syncing Feedly category: ${label}...`);
+
+						const fetchedItems: FeedlyArticle[] = [];
+						let continuation: string | undefined = undefined;
+
+						while (true) {
+							const query = continuation ? `&continuation=${continuation}` : '';
+							const res = (await apiCall(
+								this.settings.accessToken,
+								`streams/contents?streamId=${encodeURIComponent(cat.id)}&count=250${query}`
+							)) as { items?: FeedlyArticle[]; continuation?: string };
+
+							if (!res || !res.items || res.items.length === 0) break;
+
+							const validItems = res.items.filter(item => item && item.title && item.title.trim().length > 0);
+							fetchedItems.push(...validItems);
+
+							progressNotice.setMessage(`Syncing Feedly category: ${label} (${fetchedItems.length} articles)...`);
+
+							continuation = res.continuation;
+							if (!continuation || res.items.length < 250) break;
+						}
+
+						if (fetchedItems.length === 0) continue;
+
+						const articles: SyncedArticleItem[] = fetchedItems.map(a => ({
+							title: a.title.trim(),
+							primaryUrl: `https://feedly.com/i/entry/${a.id}`,
+							date: dateToJournal(new Date(a.published ?? a.crawled ?? 0)),
+							originalUrl: a.canonicalUrl || undefined,
+							publisher: a.origin?.title || undefined,
+							author: a.author || undefined
+						}));
+
+						articleGroups.push({ groupTitle: label, articles });
+					}
+
+					const { content: markdownContent, totalArticles } = generateGroupedArticlesMarkdown('Feedly Category Articles', articleGroups, 'Published');
+
+
+					const folderName = this.settings.annotationsFolder ?? 'Feedly Annotations';
+					const fileName = this.settings.feedlyCategoriesFileName || 'Feedly Categories';
+					const filePath = await saveSyncedMarkdownFile(this.app, folderName, fileName, markdownContent);
+
+					progressNotice.hide();
+					new Notice(`Synced ${totalArticles} articles across Feedly categories to ${filePath}`);
+				} catch (e: any) {
+					console.error('Error syncing Feedly categories:', e);
+					progressNotice.hide();
+					new Notice(`Error syncing Feedly categories: ${e.message || e}`);
+				}
+			}
+		});
+
+
 
 		this.addSettingTab(new FeedlySettingTab(this.app, this));
 	}
@@ -1016,6 +1188,8 @@ class FeedlySettingTab extends PluginSettingTab {
 					});
 			});
 
+		new Setting(containerEl).setName('Folder Syncing (optional)').setHeading()
+
 		new Setting(containerEl)
 			.setName('Instapaper folders filename')
 			.setDesc('Name of the Markdown file (without .md extension) where Instapaper folders will be synced')
@@ -1023,6 +1197,17 @@ class FeedlySettingTab extends PluginSettingTab {
 				component.setValue(this.settings.instapaperFoldersFileName ?? 'Instapaper Folders')
 				component.onChange(async (value) => {
 					this.settings.instapaperFoldersFileName = value
+					await this.plugin.saveSettings(this.settings)
+				})
+			});
+
+		new Setting(containerEl)
+			.setName('Feedly categories filename')
+			.setDesc('Name of the Markdown file (without .md extension) where Feedly categories will be synced')
+			.addText((component) => {
+				component.setValue(this.settings.feedlyCategoriesFileName ?? 'Feedly Categories')
+				component.onChange(async (value) => {
+					this.settings.feedlyCategoriesFileName = value
 					await this.plugin.saveSettings(this.settings)
 				})
 			});
