@@ -167,19 +167,19 @@ function generateGroupedArticlesMarkdown(
 			markdownContent += `- [${title}](${a.primaryUrl})\n`;
 			if (a.date) {
 				const label = a.dateLabel || groupDateLabel;
-				markdownContent += `  - **${label}**: ${a.date}\n`;
+				markdownContent += `    - **${label}**: ${a.date}\n`;
 			}
 			if (a.originalUrl) {
-				markdownContent += `  - **Original URL**: [${a.originalUrl}](${a.originalUrl})\n`;
+				markdownContent += `    - **Original URL**: [${a.originalUrl}](${a.originalUrl})\n`;
 			}
 			if (a.publisher) {
-				markdownContent += `  - **Publisher**: ${sanitizeFrontmatter(a.publisher)}\n`;
+				markdownContent += `    - **Publisher**: ${sanitizeFrontmatter(a.publisher)}\n`;
 			}
 			if (a.author) {
-				markdownContent += `  - **Author**: ${sanitizeFrontmatter(a.author)}\n`;
+				markdownContent += `    - **Author**: ${sanitizeFrontmatter(a.author)}\n`;
 			}
 			if (a.description) {
-				markdownContent += `  - **Description**: ${sanitizeFrontmatter(a.description)}\n`;
+				markdownContent += `    - **Description**: ${sanitizeFrontmatter(a.description)}\n`;
 			}
 		}
 		markdownContent += `\n`;
@@ -950,7 +950,8 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 							date: b.time ? dateToJournal(new Date(b.time * 1000)) : undefined,
 							originalUrl: b.url || undefined,
 							author: b.author || undefined,
-							description: b.description || undefined
+							// No useful description
+							// description: b.description || undefined
 						}));
 
 						articleGroups.push({ groupTitle: folder.title, articles });
