@@ -349,17 +349,41 @@ async function getInstapaperArticles(
 		return []
 	}
 
-	const bookmarks = await getBookmarks(client, limit)
-	if (!bookmarks || !Array.isArray(bookmarks)) {
-		progressNotice.hide()
-		return []
+	const validBookmarks: any[] = []
+	const haveIds: string[] = []
+
+	while (validBookmarks.length < limit) {
+		try {
+			const bookmarks = await client.getBookmarks(500, undefined, haveIds.join(','))
+			if (!bookmarks || !Array.isArray(bookmarks)) break
+
+			const pageBookmarks = bookmarks.filter(b => b && b.type === 'bookmark' && b.bookmark_id && b.title)
+			if (pageBookmarks.length === 0) break
+
+			let newCount = 0
+			for (const b of pageBookmarks) {
+				const bIdStr = String(b.bookmark_id)
+				if (!haveIds.includes(bIdStr)) {
+					haveIds.push(bIdStr)
+					validBookmarks.push(b)
+					newCount++
+					if (validBookmarks.length >= limit) break
+				}
+			}
+
+			if (newCount === 0 || pageBookmarks.length < 500) break
+		} catch (e) {
+			console.error('Error fetching Instapaper bookmark batch:', e)
+			new Notice(`Error fetching Instapaper bookmarks`)
+			break
+		}
 	}
 
-	const validBookmarks = bookmarks.filter(b => b && b.type === 'bookmark' && b.bookmark_id && b.title)
 	if (validBookmarks.length === 0) {
 		progressNotice.setMessage('Instapaper progress: Done (0 articles)')
 		return []
 	}
+
 
 	const out: { title: string, author: string, data: string, css: string }[] = []
 	const results: ({ title: string, author: string, data: string, css: string } | null)[] = new Array(validBookmarks.length).fill(null)
@@ -1178,7 +1202,7 @@ class FeedlySettingTab extends PluginSettingTab {
 			.setDesc('Maximum number of unread Instapaper bookmarks to include when generating ePub')
 			.addSlider((slider) => {
 				slider
-					.setLimits(5, 100, 5)
+					.setLimits(5, 500, 25)
 					.setValue(this.settings.instapaperLimit ?? 25)
 					.setDynamicTooltip()
 					.setInstant(true)
