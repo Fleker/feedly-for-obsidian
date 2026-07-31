@@ -41,8 +41,9 @@ interface FeedlySettings {
 	instapaperPassword?: string
 	instapaperLimit?: number
 	instapaperFoldersFileName?: string
-	feedlyCategoriesFileName?: string
+	feedlyBoardsFileName?: string
 }
+
 
 
 interface FeedlyAnnotatedEntry {
@@ -69,8 +70,9 @@ interface FeedlyAnnotatedEntry {
 const DEFAULT_SETTINGS: FeedlySettings = {
 	annotationsFolder: 'Feedly Annotations',
 	instapaperFoldersFileName: 'Instapaper Folders',
-	feedlyCategoriesFileName: 'Feedly Categories'
+	feedlyBoardsFileName: 'Feedly Boards'
 }
+
 
 
 
@@ -972,8 +974,8 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 		});
 
 		this.addCommand({
-			id: 'sync-feedly-categories',
-			name: 'Sync Feedly categories to Markdown list',
+			id: 'sync-feedly-boards',
+			name: 'Sync Feedly boards to Markdown list',
 			callback: async () => {
 				await this.loadSettings();
 				if (!this.settings.userId) {
@@ -983,23 +985,24 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 					return new Notice('Missing Feedly access token');
 				}
 
-				const progressNotice = new Notice('Fetching Feedly categories...', 0);
+				const progressNotice = new Notice('Fetching Feedly boards...', 0);
 				try {
-					const categories: { id: string; label: string }[] = await apiCall(
+					const tags: { id: string; label?: string }[] = await apiCall(
 						this.settings.accessToken,
-						'categories'
+						'tags'
 					);
 
-					if (!categories || !Array.isArray(categories) || categories.length === 0) {
+					if (!tags || !Array.isArray(tags) || tags.length === 0) {
 						progressNotice.hide();
-						return new Notice('No Feedly categories found');
+						return new Notice('No Feedly boards found');
 					}
 
 					const articleGroups: SyncedArticleGroup[] = [];
 
-					for (const cat of categories) {
-						const label = cat.label || 'Uncategorized';
-						progressNotice.setMessage(`Syncing Feedly category: ${label}...`);
+					for (const tag of tags) {
+						// Format tag label (or extract from tag ID if label is missing)
+						const label = tag.label || tag.id.split('/').pop() || 'Untitled Board';
+						progressNotice.setMessage(`Syncing Feedly board: ${label}...`);
 
 						const fetchedItems: FeedlyArticle[] = [];
 						let continuation: string | undefined = undefined;
@@ -1008,7 +1011,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 							const query = continuation ? `&continuation=${continuation}` : '';
 							const res = (await apiCall(
 								this.settings.accessToken,
-								`streams/contents?streamId=${encodeURIComponent(cat.id)}&count=250${query}`
+								`streams/contents?streamId=${encodeURIComponent(tag.id)}&count=250${query}`
 							)) as { items?: FeedlyArticle[]; continuation?: string };
 
 							if (!res || !res.items || res.items.length === 0) break;
@@ -1016,7 +1019,7 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 							const validItems = res.items.filter(item => item && item.title && item.title.trim().length > 0);
 							fetchedItems.push(...validItems);
 
-							progressNotice.setMessage(`Syncing Feedly category: ${label} (${fetchedItems.length} articles)...`);
+							progressNotice.setMessage(`Syncing Feedly board: ${label} (${fetchedItems.length} articles)...`);
 
 							continuation = res.continuation;
 							if (!continuation || res.items.length < 250) break;
@@ -1036,22 +1039,22 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 						articleGroups.push({ groupTitle: label, articles });
 					}
 
-					const { content: markdownContent, totalArticles } = generateGroupedArticlesMarkdown('Feedly Category Articles', articleGroups, 'Published');
-
+					const { content: markdownContent, totalArticles } = generateGroupedArticlesMarkdown('Feedly Board Articles', articleGroups, 'Published');
 
 					const folderName = this.settings.annotationsFolder ?? 'Feedly Annotations';
-					const fileName = this.settings.feedlyCategoriesFileName || 'Feedly Categories';
+					const fileName = this.settings.feedlyBoardsFileName || 'Feedly Boards';
 					const filePath = await saveSyncedMarkdownFile(this.app, folderName, fileName, markdownContent);
 
 					progressNotice.hide();
-					new Notice(`Synced ${totalArticles} articles across Feedly categories to ${filePath}`);
+					new Notice(`Synced ${totalArticles} articles across Feedly boards to ${filePath}`);
 				} catch (e: any) {
-					console.error('Error syncing Feedly categories:', e);
+					console.error('Error syncing Feedly boards:', e);
 					progressNotice.hide();
-					new Notice(`Error syncing Feedly categories: ${e.message || e}`);
+					new Notice(`Error syncing Feedly boards: ${e.message || e}`);
 				}
 			}
 		});
+
 
 
 
@@ -1226,15 +1229,16 @@ class FeedlySettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName('Feedly categories filename')
-			.setDesc('Name of the Markdown file (without .md extension) where Feedly categories will be synced')
+			.setName('Feedly boards filename')
+			.setDesc('Name of the Markdown file (without .md extension) where Feedly boards will be synced')
 			.addText((component) => {
-				component.setValue(this.settings.feedlyCategoriesFileName ?? 'Feedly Categories')
+				component.setValue(this.settings.feedlyBoardsFileName ?? 'Feedly Boards')
 				component.onChange(async (value) => {
-					this.settings.feedlyCategoriesFileName = value
+					this.settings.feedlyBoardsFileName = value
 					await this.plugin.saveSettings(this.settings)
 				})
 			});
+
 
 
 		// containerEl.createEl("h2", { text: "Debug" });
