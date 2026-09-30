@@ -1,118 +1,127 @@
 import { Notice, requestUrl, RequestUrlParam } from 'obsidian';
-import OAuth from 'oauth-1.0a';
-import hmacSHA1 from 'crypto-js/hmac-sha1';
-import Base64 from 'crypto-js/enc-base64';
+
+export type InstapaperBookmarkSection = 'home' | 'archive' | 'liked' | 'folder' | 'tag';
+
+export interface InstapaperTag {
+    id: number;
+    name: string;
+    slug: string;
+    count: number;
+}
+
+export interface InstapaperProgress {
+    percentage: number;
+    timestamp: number;
+}
+
+export interface InstapaperBookmark {
+    id: number;
+    url: string | null;
+    title: string | null;
+    description: string | null;
+    image: string | null;
+    progress: InstapaperProgress;
+    liked: boolean;
+    archived: boolean;
+    time: number;
+    pubtime: number | null;
+    author: string | null;
+    folder_id: number | null;
+    tags: InstapaperTag[];
+    private_source: string | null;
+    category: number;
+}
+
+export interface InstapaperBookmarkList {
+    bookmarks: InstapaperBookmark[];
+    total: number;
+    deleted_ids?: number[];
+}
+
+export interface InstapaperFolder {
+    id: number;
+    title: string;
+    slug: string;
+    position: number;
+    public: boolean;
+    count: number;
+}
+
+export interface InstapaperParsedResult {
+    metadata: {
+        title: string | null;
+        author: { name: string; url: string | null } | null;
+        pubtime: number | null;
+        thumbnail: string | null;
+        description: string | null;
+        private_source: string | null;
+        category: number;
+    };
+    content: {
+        body: string | null;
+        images: string[];
+        words: number | null;
+        paywalled: boolean;
+        direction: string | null;
+    };
+}
 
 export class InstapaperClient {
-    private oauth: OAuth;
-    private token?: OAuth.Token;
+    private accessToken: string;
+    private baseUrl = 'https://www.instapaper.com/api/2';
 
-    constructor(consumerKey: string, consumerSecret: string, tokenKey?: string, tokenSecret?: string) {
-        // Initialize the OAuth 1.0a signer
-        this.oauth = new OAuth({
-            consumer: { key: consumerKey, secret: consumerSecret },
-            signature_method: 'HMAC-SHA1',
-            hash_function(base_string: string, key: string) {
-                // Instapaper requires HMAC-SHA1 signatures
-                return hmacSHA1(base_string, key).toString(Base64);
-            },
-        });
-
-        // If you already have the user's token saved in your plugin settings, load it here
-        if (tokenKey && tokenSecret) {
-            this.token = { key: tokenKey, secret: tokenSecret };
-        }
+    constructor(accessToken: string) {
+        this.accessToken = accessToken;
     }
 
     /**
-     * Step 1: Authenticate using xAuth
-     * Trades username/password for a permanent OAuth token
+     * Fetch a page of bookmarks for a given section or folder
      */
-    async authenticate(username: string, password: string): Promise<OAuth.Token> {
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1/oauth/access_token',
-            method: 'POST',
-            data: {
-                x_auth_username: username,
-                x_auth_password: password,
-                x_auth_mode: 'client_auth'
+    async getBookmarks(
+        limit: number = 25,
+        folderId?: number,
+        offset: number = 0,
+        section?: InstapaperBookmarkSection
+    ): Promise<InstapaperBookmarkList> {
+        return this.executeRequest<InstapaperBookmarkList>('GET', '/bookmarks', {
+            query: {
+                section,
+                folder_id: folderId,
+                limit,
+                offset,
             }
-        };
-
-        const responseText = await this.executeRequest(requestData, false);
-        
-        // The xAuth endpoint returns form-urlencoded data, e.g., oauth_token=...&oauth_token_secret=...
-        const params = new URLSearchParams(responseText);
-        this.token = {
-            key: params.get('oauth_token') || '',
-            secret: params.get('oauth_token_secret') || ''
-        };
-
-        return this.token;
+        });
     }
-
-    /**
-     * Fetch bookmarks for a given folder ('unread', 'starred', 'archive', or a numeric folder_id)
-     */
-    async getBookmarks(limit: number = 25, folderId?: string | number, have?: string) {
-        const data: Record<string, unknown> = { limit };
-        if (folderId !== undefined) {
-            data.folder_id = folderId;
-        }
-        if (have) {
-            data.have = have;
-        }
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1/bookmarks/list',
-            method: 'POST',
-            data
-        };
-
-        const responseText = await this.executeRequest(requestData);
-        return JSON.parse(responseText);
-    }
-
 
     /**
      * Fetch user's custom folders
      */
-    async getFolders() {
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1/folders/list',
-            method: 'POST'
-        };
-
-        const responseText = await this.executeRequest(requestData);
-        return JSON.parse(responseText);
+    async getFolders(): Promise<InstapaperFolder[]> {
+        const res = await this.executeRequest<{ folders: InstapaperFolder[] }>('GET', '/folders');
+        return res.folders ?? [];
     }
-
 
     /**
      * Add a new bookmark
      */
-    async addBookmark(url: string, title?: string, description?: string) {
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1/bookmarks/add',
-            method: 'POST',
-            data: { url, title, description }
-        };
+    async addBookmark(url: string, title?: string, description?: string, folderId?: number): Promise<InstapaperBookmark> {
+        const body: Record<string, unknown> = { url };
+        if (title !== undefined) body.title = title;
+        if (description !== undefined) body.description = description;
+        if (folderId !== undefined) body.folder_id = folderId;
 
-        const responseText = await this.executeRequest(requestData);
-        return JSON.parse(responseText);
+        return this.executeRequest<InstapaperBookmark>('POST', '/bookmarks', {
+            json: body
+        });
     }
 
     /**
      * Archive a bookmark
      */
-    async archiveBookmark(bookmarkId: number) {
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1/bookmarks/archive',
-            method: 'POST',
-            data: { bookmark_id: bookmarkId }
-        };
-
-        const responseText = await this.executeRequest(requestData);
-        return JSON.parse(responseText);
+    async archiveBookmark(bookmarkId: number): Promise<InstapaperBookmark> {
+        return this.executeRequest<InstapaperBookmark>('POST', `/bookmarks/${bookmarkId}/move`, {
+            json: { section: 'archive' }
+        });
     }
 
     /**
@@ -121,57 +130,65 @@ export class InstapaperClient {
      * @returns A string containing the HTML of the article
      */
     async getText(bookmarkId: number | string): Promise<string | null> {
-        const requestData = {
-            url: 'https://www.instapaper.com/api/1.1/bookmarks/get_text',
-            method: 'POST',
-            data: { bookmark_id: String(bookmarkId) }
-        };
-
-        // This endpoint returns raw HTML, so we do not use JSON.parse() here
         try {
-            const response = await this.executeRequest(requestData);
-            return response;
+            const response = await this.executeRequest<InstapaperParsedResult>('GET', `/bookmarks/${bookmarkId}/parse`);
+            return response?.content?.body ?? null;
         } catch (e) {
             console.error(`Cannot fetch article ${bookmarkId}`, e);
             new Notice(`Cannot fetch article ${bookmarkId}`);
         }
-        return null
+        return null;
     }
 
     /**
      * Core Request Engine using Obsidian's native requestUrl
      */
-    private async executeRequest(requestData: OAuth.RequestOptions, useToken: boolean = true): Promise<string> {
-        // Generate the OAuth 1.0a authorization header
-        const authorization = this.oauth.authorize(requestData, useToken ? this.token : undefined);
-        const headers = this.oauth.toHeader(authorization) as unknown as Record<string, string>;
-
-        // Convert the JSON data payload into x-www-form-urlencoded format
-        const bodyParams = new URLSearchParams();
-        if (requestData.data) {
-            for (const [key, value] of Object.entries(requestData.data)) {
+    private async executeRequest<T>(
+        method: string,
+        path: string,
+        options?: {
+            query?: Record<string, string | number | boolean | undefined>;
+            json?: Record<string, unknown>;
+        }
+    ): Promise<T> {
+        let url = `${this.baseUrl}${path}`;
+        if (options?.query) {
+            const params = new URLSearchParams();
+            for (const [key, value] of Object.entries(options.query)) {
                 if (value !== undefined && value !== null) {
-                    bodyParams.append(key, String(value));
+                    params.append(key, String(value));
                 }
+            }
+            const qs = params.toString();
+            if (qs) {
+                url += `?${qs}`;
             }
         }
 
-        const options: RequestUrlParam = {
-            url: requestData.url,
-            method: requestData.method,
-            headers: {
-                ...headers,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: bodyParams.toString()
+        const headers: Record<string, string> = {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Accept': 'application/json',
+        };
+
+        let body: string | undefined;
+        if (options?.json !== undefined) {
+            headers['Content-Type'] = 'application/json';
+            body = JSON.stringify(options.json);
+        }
+
+        const reqOptions: RequestUrlParam = {
+            url,
+            method,
+            headers,
+            body,
         };
 
         try {
             // Using Obsidian's requestUrl bypasses browser CORS limitations
-            const response = await requestUrl(options);
-            return response.text; 
+            const response = await requestUrl(reqOptions);
+            return response.json as T;
         } catch (error) {
-            console.error("Instapaper API Request Failed:", error);
+            console.error('Instapaper API Request Failed:', error);
             throw error;
         }
     }

@@ -1,6 +1,6 @@
 {
 	"name": "feedly",
-	"version": "1.0.0",
+	"version": "1.6.0",
 	"description": "Sync your Feedly annotations to Obsidian.",
 	"main": "main.js",
 	"scripts": {
@@ -13,7 +13,6 @@
 	"author": "Nick Felker",
 	"license": "Apache-2.0",
 	"devDependencies": {
-		"@types/crypto-js": "^4.2.2",
 		"@types/node": "^18.0.0",
 		"esbuild": "^0.25.8",
 		"obsidian": "^1.13.1",
@@ -21,10 +20,8 @@
 		"typescript": "5.7.2"
 	},
 	"dependencies": {
-		"crypto-js": "^4.2.0",
 		"jszip": "^3.10.1",
 		"nodepub": "github:fleker/nodepub#master",
-		"oauth-1.0a": "^2.2.6",
 		"process": "^0.11.10"
 	},
 	"overrides": {
