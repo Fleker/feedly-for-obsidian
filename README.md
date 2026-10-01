@@ -71,3 +71,16 @@ You can optionally connect your Instapaper account (using Instapaper API v2) to 
 - **Sync Folders to Markdown**: Run **Sync Instapaper folders to Markdown list** to export bookmarks from your custom Instapaper folders into a grouped Markdown file (defaults to `Instapaper Folders.md` in your sync directory).
 - **Save Links to Instapaper**: Right-click any URL in Obsidian and select **Add to Instapaper** from the context menu.
 
+## Testing
+
+To run the integration test suite against the live Instapaper API v2 and Feedly APIs:
+
+1. Copy `.env.example` to `.env` (which is git-ignored):
+   ```bash
+   cp .env.example .env
+   ```
+2. Fill in your `INSTAPAPER_ACCESS_TOKEN`, `FEEDLY_ACCESS_TOKEN`, and `FEEDLY_USER_ID` in `.env`.
+3. Run the tests:
+   ```bash
+   npm test
+   ```
