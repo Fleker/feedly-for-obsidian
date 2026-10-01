@@ -7,6 +7,7 @@
 		"dev": "node esbuild.config.mjs",
 		"pbuild": "tsc -noEmit -skipLibCheck",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "esbuild test/integration.test.ts --bundle --platform=node --alias:obsidian=./test/obsidian-shim.ts | node",
 		"version": "node version-bump.mjs && git add manifest.json versions.json"
 	},
 	"keywords": [],
