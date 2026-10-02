@@ -18,5 +18,10 @@ main.js
 # obsidian
 data.json
 
+# Local environment variables for integration tests
+.env
+.env.*
+!.env.example
+
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store

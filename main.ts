@@ -1,5 +1,5 @@
 import { App, FileManager, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
-import { InstapaperClient } from './instapaper';
+import { InstapaperBookmark, InstapaperClient } from './instapaper';
 import nodepub, { NodepubFile } from 'nodepub';
 import JSZip from 'jszip';
 
@@ -35,10 +35,7 @@ interface FeedlySettings {
 	annotationsFolder?: string
 	/** Comma-separated list of publishers to exclude from epub generation */
 	filteredPublishers?: string
-	instapaperConsumerKey?: string
-	instapaperConsumerSecret?: string
-	instapaperUsername?: string
-	instapaperPassword?: string
+	instapaperAccessToken?: string
 	instapaperLimit?: number
 	instapaperFoldersFileName?: string
 	feedlyBoardsFileName?: string
@@ -314,66 +311,31 @@ async function getSavedLater(accessToken: string, userId: string) {
     return articles
 }
 
-async function authorizeInstapaper(client: InstapaperClient, username: string, password: string, consumerKey: string, consumerSecret: string) {
-	try {
-		await client.authenticate(username, password)
-		return true
-	} catch (e) {
-		new Notice(`Error authorizing Instapaper`)
-		console.error(e)
-	}
-	return false
-}
-
-async function getBookmarks(client: InstapaperClient, limit: number = 25) {
-	try {
-		const bookmarks = await client.getBookmarks(limit)
-		return bookmarks
-	} catch (e) {
-		new Notice(`Error fetching Instapaper bookmarks`)
-		console.error(e)
-	}
-	return null
-}
-
 async function getInstapaperArticles(
-	consumerKey: string,
-	consumerSecret: string,
-	username: string,
-	password: string,
+	accessToken: string,
 	limit: number = 25,
 ): Promise<{ title: string, author: string, data: string, css: string }[]> {
 	const progressNotice = new Notice('Fetching Instapaper articles...', 0)
-	const client = new InstapaperClient(consumerKey, consumerSecret)
-	const authorized = await authorizeInstapaper(client, username, password, consumerKey, consumerSecret)
-	if (!authorized) {
-		progressNotice.hide()
-		return []
-	}
+	const client = new InstapaperClient(accessToken)
 
-	const validBookmarks: any[] = []
-	const haveIds: string[] = []
+	const validBookmarks: InstapaperBookmark[] = []
+	let offset = 0
 
 	while (validBookmarks.length < limit) {
 		try {
-			const bookmarks = await client.getBookmarks(500, undefined, haveIds.join(','))
-			if (!bookmarks || !Array.isArray(bookmarks)) break
+			const pageSize = Math.min(limit - validBookmarks.length, 500)
+			const res = await client.getBookmarks(pageSize, undefined, offset)
+			if (!res || !Array.isArray(res.bookmarks) || res.bookmarks.length === 0) break
 
-			const pageBookmarks = bookmarks.filter(b => b && b.type === 'bookmark' && b.bookmark_id && b.title)
-			if (pageBookmarks.length === 0) break
-
-			let newCount = 0
-			for (const b of pageBookmarks) {
-				const bIdStr = String(b.bookmark_id)
-				if (!haveIds.includes(bIdStr)) {
-					haveIds.push(bIdStr)
+			for (const b of res.bookmarks) {
+				if (b && b.id && b.title) {
 					validBookmarks.push(b)
-					newCount++
 					if (validBookmarks.length >= limit) break
 				}
 			}
 
-			if (newCount === 0 || pageBookmarks.length < 500) break
+			offset += res.bookmarks.length
+			if (res.bookmarks.length < pageSize || offset >= res.total) break
 		} catch (e) {
 			console.error('Error fetching Instapaper bookmark batch:', e)
 			new Notice(`Error fetching Instapaper bookmarks`)
@@ -400,20 +362,27 @@ async function getInstapaperArticles(
 		while (currentIndex < validBookmarks.length) {
 			const index = currentIndex++
 			const b = validBookmarks[index]
-			const { bookmark_id, url, title } = b
+			const { id, url } = b
+			const title = b.title ?? 'Untitled'
 			try {
-				const content = await client.getText(bookmark_id)
+				const parsed = await client.parseBookmark(id)
+				const content = parsed?.content?.body ?? null
 				if (content === null) {
 					skippedCount++
 				} else {
 					const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
-					const author = b.author ?? 'Unknown'
+					const pubtime = b.pubtime ?? parsed?.metadata?.pubtime
+					const pubDate = pubtime ? dateToJournal(new Date(pubtime * 1000)) : undefined
+					const rawAuthor = b.author ?? parsed?.metadata?.author?.name
+					const author = rawAuthor ?? 'Unknown'
 					const data = `<h2>${title}</h2>
 <pre>---
 url: ${url}
-instapaperUrl: https://www.instapaper.com/read/${bookmark_id}
+instapaperUrl: https://www.instapaper.com/read/${id}
 title: ${title}
-saveDate: ${saveDate}${b.description ? `
+saveDate: ${saveDate}${pubDate ? `
+pubDate: ${pubDate}` : ''}${rawAuthor ? `
+author: ${sanitizeFrontmatter(rawAuthor)}` : ''}${b.description ? `
 description: ${sanitizeFrontmatter(b.description)}` : ''}
 ---</pre>
 <div>${content}</div>`
@@ -426,8 +395,8 @@ description: ${sanitizeFrontmatter(b.description)}` : ''}
 				}
 			} catch (e) {
 				const errorMsg = e.message || e.toString()
-				if (errorMsg.includes('1550')) {
-					console.warn(`Instapaper: Unable to parse text for "${title}" (1550). This article will be skipped.`)
+				if (errorMsg.includes('1550') || errorMsg.includes('Parsed content unavailable') || errorMsg.includes('status 400')) {
+					console.warn(`Instapaper: Unable to parse text for "${title}". This article will be skipped.`)
 				} else {
 					console.error(`Instapaper: Unexpected error fetching "${title}":`, e)
 				}
@@ -579,12 +548,7 @@ export default class FeedlyPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on('url-menu', (menu, url) => {
-				if (
-					this.settings.instapaperConsumerKey &&
-					this.settings.instapaperConsumerSecret &&
-					this.settings.instapaperUsername &&
-					this.settings.instapaperPassword
-				) {
+				if (this.settings.instapaperAccessToken) {
 					menu.addItem((item) => {
 						item.setTitle('Add to Instapaper')
 							.setIcon('bookmark')
@@ -592,12 +556,7 @@ export default class FeedlyPlugin extends Plugin {
 								new Notice(`Saving ${url} to Instapaper...`);
 								try {
 									const client = new InstapaperClient(
-										this.settings.instapaperConsumerKey!,
-										this.settings.instapaperConsumerSecret!
-									);
-									await client.authenticate(
-										this.settings.instapaperUsername!,
-										this.settings.instapaperPassword!
+										this.settings.instapaperAccessToken!
 									);
 									await client.addBookmark(url);
 									new Notice('Saved to Instapaper!');
@@ -813,16 +772,10 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 
 				let totalArticles = articlesToExport.length
 				// Include Instapaper articles if credentials are configured
-				if (this.settings.instapaperConsumerKey &&
-					this.settings.instapaperConsumerSecret &&
-					this.settings.instapaperUsername &&
-					this.settings.instapaperPassword) {
+				if (this.settings.instapaperAccessToken) {
 					try {
 						const instapaperContents = await getInstapaperArticles(
-							this.settings.instapaperConsumerKey,
-							this.settings.instapaperConsumerSecret,
-							this.settings.instapaperUsername,
-							this.settings.instapaperPassword,
+							this.settings.instapaperAccessToken,
 							this.settings.instapaperLimit ?? 25,
 						)
 						contents.push(...instapaperContents)
@@ -871,41 +824,22 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 			name: 'Sync Instapaper folders to Markdown list',
 			callback: async () => {
 				await this.loadSettings();
-				if (
-					!this.settings.instapaperConsumerKey ||
-					!this.settings.instapaperConsumerSecret ||
-					!this.settings.instapaperUsername ||
-					!this.settings.instapaperPassword
-				) {
-					return new Notice('Missing Instapaper credentials in settings');
+				if (!this.settings.instapaperAccessToken) {
+					return new Notice('Missing Instapaper access token in settings');
 				}
 
 				const progressNotice = new Notice('Syncing Instapaper folders...', 0);
 				try {
-					const client = new InstapaperClient(
-						this.settings.instapaperConsumerKey,
-						this.settings.instapaperConsumerSecret
-					);
-					const authorized = await authorizeInstapaper(
-						client,
-						this.settings.instapaperUsername,
-						this.settings.instapaperPassword,
-						this.settings.instapaperConsumerKey,
-						this.settings.instapaperConsumerSecret
-					);
-					if (!authorized) {
-						progressNotice.hide();
-						return;
-					}
+					const client = new InstapaperClient(this.settings.instapaperAccessToken);
 
 					// Fetch custom folders from Instapaper
 					const folderListRes = await client.getFolders().catch(() => []);
 					const customFolders = Array.isArray(folderListRes)
-						? folderListRes.filter((f: any) => f && f.type === 'folder' && f.folder_id && f.title)
+						? folderListRes.filter((f) => f && f.id && f.title)
 						: [];
 
-					const foldersToSync: { id: string | number; title: string }[] = customFolders.map((f: any) => ({
-						id: f.folder_id,
+					const foldersToSync: { id: number; title: string }[] = customFolders.map((f) => ({
+						id: f.id,
 						title: f.title
 					}));
 
@@ -913,40 +847,34 @@ publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
 
 					for (const folder of foldersToSync) {
 						progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title}...`);
-						const rawBookmarks: any[] = [];
-						const haveIds: string[] = [];
+						const rawBookmarks: InstapaperBookmark[] = [];
+						let offset = 0;
 
 						while (true) {
-							const response = await client.getBookmarks(500, folder.id, haveIds.join(',')).catch(e => {
+							const response = await client.getBookmarks(500, folder.id, offset).catch(e => {
 								console.error(`Error fetching folder ${folder.title}:`, e);
 								return null;
 							});
 
-							if (!response || !Array.isArray(response)) break;
+							if (!response || !Array.isArray(response.bookmarks) || response.bookmarks.length === 0) break;
 
-							const pageBookmarks = response.filter((b: any) => b && b.type === 'bookmark' && b.title && b.title.trim().length > 0);
-							if (pageBookmarks.length === 0) break;
-
-							let newCount = 0;
-							for (const b of pageBookmarks) {
-								const bIdStr = String(b.bookmark_id);
-								if (b.bookmark_id && !haveIds.includes(bIdStr)) {
-									haveIds.push(bIdStr);
+							for (const b of response.bookmarks) {
+								if (b && b.id && b.title && b.title.trim().length > 0) {
 									rawBookmarks.push(b);
-									newCount++;
 								}
 							}
 
 							progressNotice.setMessage(`Syncing Instapaper folder: ${folder.title} (${rawBookmarks.length} articles)...`);
 
-							if (newCount === 0 || pageBookmarks.length < 500) break;
+							offset += response.bookmarks.length;
+							if (response.bookmarks.length < 500 || offset >= response.total) break;
 						}
 
 						if (rawBookmarks.length === 0) continue;
 
-						const articles: SyncedArticleItem[] = rawBookmarks.map((b: any) => ({
-							title: b.title.trim(),
-							primaryUrl: b.bookmark_id ? `https://www.instapaper.com/read/${b.bookmark_id}` : (b.url || ''),
+						const articles: SyncedArticleItem[] = rawBookmarks.map((b) => ({
+							title: b.title!.trim(),
+							primaryUrl: b.id ? `https://www.instapaper.com/read/${b.id}` : (b.url || ''),
 							date: b.time ? dateToJournal(new Date(b.time * 1000)) : undefined,
 							originalUrl: b.url || undefined,
 							author: b.author || undefined,
@@ -1160,44 +1088,23 @@ class FeedlySettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Instapaper (optional)').setHeading()
 
 		new Setting(containerEl)
-			.setName('Instapaper consumer key')
-			.setDesc('OAuth consumer key from your Instapaper API application')
-			.addText((component) => {
-				component.setValue(this.settings.instapaperConsumerKey ?? '')
-				component.onChange(async (value) => {
-					this.settings.instapaperConsumerKey = value
-					await this.plugin.saveSettings(this.settings)
-				})
-			})
-
-		new Setting(containerEl)
-			.setName('Instapaper consumer secret')
-			.addText((component) => {
-				component.setValue(this.settings.instapaperConsumerSecret ?? '')
-				component.onChange(async (value) => {
-					this.settings.instapaperConsumerSecret = value
-					await this.plugin.saveSettings(this.settings)
-				})
-			})
-
-		new Setting(containerEl)
-			.setName('Instapaper username')
-			.addText((component) => {
-				component.setValue(this.settings.instapaperUsername ?? '')
-				component.onChange(async (value) => {
-					this.settings.instapaperUsername = value
-					await this.plugin.saveSettings(this.settings)
-				})
-			})
-
-		new Setting(containerEl)
-			.setName('Instapaper password')
+			.setName('Instapaper access token')
+			.setDesc('Personal access token or OAuth 2 bearer token from your Instapaper API application')
 			.addText((component) => {
 				component.inputEl.type = 'password'
-				component.setValue(this.settings.instapaperPassword ?? '')
+				component.setValue(this.settings.instapaperAccessToken ?? '')
 				component.onChange(async (value) => {
-					this.settings.instapaperPassword = value
+					this.settings.instapaperAccessToken = value
 					await this.plugin.saveSettings(this.settings)
+				})
+			})
+
+		new Setting(containerEl)
+			.setName('Create an Instapaper access token')
+			.addButton((component) => {
+				component.setButtonText('Connect')
+				component.onClick(() => {
+					window.location.href = 'https://www.instapaper.com/developers/applications'
 				})
 			})
 

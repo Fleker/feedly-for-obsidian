@@ -54,3 +54,33 @@ all of the Feedly Sync ePub files currently in your vault.
 
 When generating ePub files, one can also include Instapaper as a source.
 These articles are appended at the end.
+
+## Instapaper Integration (Optional)
+
+You can optionally connect your Instapaper account (using Instapaper API v2) to include unread bookmarks in generated ePubs, sync custom folders into a Markdown reading list, and save links directly from Obsidian.
+
+### Setup
+
+1. Go to [Instapaper Developer Applications](https://www.instapaper.com/developers/applications) and register a personal application (or select an existing one).
+2. Generate a **Personal Access Token** on your application's page.
+3. Paste the token into **Instapaper access token** in the plugin settings.
+
+### Features
+
+- **Include in ePubs**: Unread Instapaper articles (up to your configured **Instapaper bookmark limit**) are automatically fetched, parsed, and appended when running **Generate ePub**.
+- **Sync Folders to Markdown**: Run **Sync Instapaper folders to Markdown list** to export bookmarks from your custom Instapaper folders into a grouped Markdown file (defaults to `Instapaper Folders.md` in your sync directory).
+- **Save Links to Instapaper**: Right-click any URL in Obsidian and select **Add to Instapaper** from the context menu.
+
+## Testing
+
+To run the integration test suite against the live Instapaper API v2 and Feedly APIs:
+
+1. Copy `.env.example` to `.env` (which is git-ignored):
+   ```bash
+   cp .env.example .env
+   ```
+2. Fill in your `INSTAPAPER_ACCESS_TOKEN`, `FEEDLY_ACCESS_TOKEN`, and `FEEDLY_USER_ID` in `.env`.
+3. Run the tests:
+   ```bash
+   npm test
+   ```
