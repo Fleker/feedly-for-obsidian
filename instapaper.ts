@@ -125,19 +125,28 @@ export class InstapaperClient {
     }
 
     /**
-     * Retrieves the parsed HTML content of a bookmark
+     * Retrieves the parsed metadata and HTML content of a bookmark
      * @param bookmarkId The ID of the bookmark to fetch
-     * @returns A string containing the HTML of the article
+     * @returns The parsed result containing metadata and HTML content
      */
-    async getText(bookmarkId: number | string): Promise<string | null> {
+    async parseBookmark(bookmarkId: number | string): Promise<InstapaperParsedResult | null> {
         try {
-            const response = await this.executeRequest<InstapaperParsedResult>('GET', `/bookmarks/${bookmarkId}/parse`);
-            return response?.content?.body ?? null;
+            return await this.executeRequest<InstapaperParsedResult>('GET', `/bookmarks/${bookmarkId}/parse`);
         } catch (e) {
             console.error(`Cannot fetch article ${bookmarkId}`, e);
             new Notice(`Cannot fetch article ${bookmarkId}`);
         }
         return null;
+    }
+
+    /**
+     * Retrieves the parsed HTML content of a bookmark
+     * @param bookmarkId The ID of the bookmark to fetch
+     * @returns A string containing the HTML of the article
+     */
+    async getText(bookmarkId: number | string): Promise<string | null> {
+        const response = await this.parseBookmark(bookmarkId);
+        return response?.content?.body ?? null;
     }
 
     /**

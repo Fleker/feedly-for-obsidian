@@ -365,18 +365,24 @@ async function getInstapaperArticles(
 			const { id, url } = b
 			const title = b.title ?? 'Untitled'
 			try {
-				const content = await client.getText(id)
+				const parsed = await client.parseBookmark(id)
+				const content = parsed?.content?.body ?? null
 				if (content === null) {
 					skippedCount++
 				} else {
 					const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
-					const author = b.author ?? 'Unknown'
+					const pubtime = b.pubtime ?? parsed?.metadata?.pubtime
+					const pubDate = pubtime ? dateToJournal(new Date(pubtime * 1000)) : undefined
+					const rawAuthor = b.author ?? parsed?.metadata?.author?.name
+					const author = rawAuthor ?? 'Unknown'
 					const data = `<h2>${title}</h2>
 <pre>---
 url: ${url}
 instapaperUrl: https://www.instapaper.com/read/${id}
 title: ${title}
-saveDate: ${saveDate}${b.description ? `
+saveDate: ${saveDate}${pubDate ? `
+pubDate: ${pubDate}` : ''}${rawAuthor ? `
+author: ${sanitizeFrontmatter(rawAuthor)}` : ''}${b.description ? `
 description: ${sanitizeFrontmatter(b.description)}` : ''}
 ---</pre>
 <div>${content}</div>`
