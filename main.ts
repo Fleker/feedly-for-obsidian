@@ -493,17 +493,32 @@ export function cleanContent(html: string) {
 
 	let content = html;
 
-	// 1. Remove preheaders, display:none blocks, and zero-font hidden spans (e.g. bot honeypots, preview text)
+	// 1. Remove preheaders, display:none blocks, and zero-font hidden spans (e.g. Mailchimp bot honeypots, preview text)
 	content = content.replace(/<(div|span|p|tr|td|a)\b[^>]*\bdisplay\s*:\s*none\b[^>]*>(?:(?!<\1\b)[\s\S])*?<\/\1>/gi, '');
 	content = content.replace(/<span\b[^>]*\bfont-size\s*:\s*0(?:px)?(?:\s*;|\s*["'])[^>]*>[^<]*<\/span>/gi, '');
 
-	// 2. Remove known ad and social blocks
+	// 2. Remove known ad blocks, Substack editor labels ("Text within this block..."), subscribe widgets, and Mailchimp CTA/footer blocks
 	content = content.replace(/<div[^>]*data-block="(top-ad|ad|social)"[^>]*>[\s\S]*?<\/div>/gi, '');
+	content = content.replace(
+		/<label\b[^>]*>Text within this block will maintain its original spacing when published<\/label>/gi,
+		''
+	);
+	content = content.replace(/<p\b[^>]*\bdata-component-name="ButtonCreateButton"[^>]*>[\s\S]*?<\/p>/gi, '');
+	content = content.replace(/<a\b[^>]*\bdata-button-link-id=[^>]*>[\s\S]*?<\/a>/gi, '');
+	content = content.replace(/<div\b[^>]*\bdata-block-id="9"[^>]*>[\s\S]*?<\/div>/gi, '');
+	for (let i = 0; i < 3; i++) {
+		content = content.replace(
+			/<div\b[^>]*\bdata-component-name="SubscribeWidget(?:ToDOM)?"[^>]*>(?:(?!<div\b)[\s\S])*?<\/div>/gi,
+			''
+		);
+	}
 
-	// 3. Remove "View in browser", "View Email in Your Browser", "View on ...", "View in app", "Read in app" links
+	// 3. Remove "Forwarded this email?", "View in browser", "Read in app", and standalone social/engagement action links
+	//    (Share, Like, Comment, Restack, Subscribe/Subscribed, Read more, Read full story, View page, Unsubscribe)
+	content = content.replace(/Forwarded this email\?\s*<a\b[^>]*>Subscribe here<\/a>\s*for more/gi, '');
 	content = content.replace(/View on\s*<a\b[^>]*>[\s\S]*?<\/a>/gi, '');
 	content = content.replace(
-		/<a\b[^>]*>(?:<[^>]*>|\s)*(?:View in browser|View email in your browser|View on |View in app|Read in app)(?:<[^>]*>|\s)*<\/a>/gi,
+		/<a\b[^>]*>(?:<[^>]*>|\s)*(?:View in browser|View email in your browser|View on |View in app|Read in app|Subscribed|Subscribe(?:\s+now)?|Share|Like|Comment|Restack|Read\s+more|Read\s+full\s+story|View\s+page|Unsubscribe(?:\s+from\s+this\s+digest)?)(?:<[^>]*>|\s)*<\/a>/gi,
 		''
 	);
 
@@ -514,26 +529,43 @@ export function cleanContent(html: string) {
 		.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
 
 	// 5. Flatten all tables and <center> wrappers completely regardless of nesting depth
-	// We replace table structural tags with nothing, and tr/td/th with divs to keep the flow
+	//    We replace table structural tags with nothing, and tr/td/th with divs to keep the flow
 	content = content
 		.replace(/<\/?(table|tbody|thead|tfoot|colgroup|col|center)\b[^>]*>/gi, '')
 		.replace(/<(tr|td|th)\b[^>]*>/gi, '<div>')
 		.replace(/<\/(tr|td|th)>/gi, '</div>');
 
-	// 6. Unwrap heading-wrapped links and sanitize links (before stripping style so non-blue card/title links are detected)
+	// 6. Remove templated newsletter subscribe/forwarded banners and footer boilerplate
+	//    (Bloomberg/Patreon/Substack/Inquirer/Mailchimp copyright, mailing addresses, unsubscribe & app download footers)
+	content = content
+		// Bloomberg footer block starting from "Follow Us" / "Get the newsletter" through the corporate mailing address
+		.replace(/<span\b[^>]*>\s*Follow Us\s*<\/span>[\s\S]*?Bloomberg L\.P\.[^<]*/gi, '')
+		// Patreon "Did you like this post?" share prompt and footer block through "App Store"
+		.replace(/<p\b[^>]*>\s*Did you like this post\?\s*<\/p>/gi, '')
+		.replace(/<p\b[^>]*>\s*Share this post with someone who might enjoy it\.\s*<\/p>/gi, '')
+		.replace(/©\s*\d{4}\s+It's Super Effective[\s\S]*?App Store\s*<\/a>/gi, '')
+		// Substack footer paragraph containing copyright and 548 Market Street address / Unsubscribe
+		.replace(/<p\b[^>]*>\s*©\s*\d{4}\b(?:(?!<\/p>)[\s\S])*?(?:548 Market Street|Unsubscribe)(?:(?!<\/p>)[\s\S])*?<\/p>/gi, '')
+		// Forwarded-email banners, newsletter signup CTAs, sponsorship blurbs, legal notices, and mailing address paragraphs
+		.replace(
+			/<p\b[^>]*>(?:(?!<\/p>)[\s\S])*?(?:If someone forwarded you this email|If you'd like to get\s+Money\s+Stuff\s+in handy email form|Thanks for reading [^<]*!|By submitting your written, visual, and\/or audio contributions|Interested in sponsoring (?:an Inquirer newsletter|these emails)\?|Download Our App\b|Written communications concerning this mailing may be directed to|100 S\.\s*Independence Mall West|©\s*Copyright \d{4}|Copyright © [^\n<]*All Rights Reserved|178 Columbus Ave #237190|This email was sent to\b|Want to manage which newsletters you receive\?)(?:(?!<\/p>)[\s\S])*?<\/p>/gi,
+			''
+		);
+
+	// 7. Unwrap heading-wrapped links and sanitize links (before stripping style so non-blue card/title links are detected)
 	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b[^>]*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
 	content = sanitizeLinks(content);
 
-	// 7. Strip all inline style, bgcolor, and align attributes that cause odd backgrounds or broken e-reader styling
+	// 8. Strip all inline style, bgcolor, and align attributes that cause odd backgrounds or broken e-reader styling
 	content = content
 		.replace(/\s*\bstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
 		.replace(/\s*\bbgcolor\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
 		.replace(/\s*\balign\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 
-	// 8. Final cleanup of empty spans, paragraphs, figures, headings, and divs
+	// 9. Final cleanup of empty spans, paragraphs, figures, headings, and divs
 	content = content.replace(/<span\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/span>/gi, '');
 	content = content.replace(/<(p|figure|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
-	for (let i = 0; i < 4; i++) {
+	for (let i = 0; i < 5; i++) {
 		content = content.replace(/<div\b[^>]*>(?:[\s\u200A-\u200D\uFEFF]|<br\s*\/?>)*<\/div>/gi, '');
 	}
 

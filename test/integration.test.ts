@@ -67,6 +67,11 @@ async function runTests() {
 		assert.ok(!cleaned.includes('#D1E7F1'), 'Expected #D1E7F1 callout background color to be stripped');
 		assert.ok(!cleaned.includes('And a glimpse of what summer has in store'), 'Expected display:none preheader to be stripped');
 		assert.ok(!cleaned.includes('View on'), 'Expected "View on inquirer.com" header noise to be stripped');
+		assert.ok(!cleaned.includes('If someone forwarded you this email'), 'Expected forwarded-email signup banner to be stripped');
+		assert.ok(!cleaned.includes('By submitting your written, visual'), 'Expected legal submission disclaimer to be stripped');
+		assert.ok(!cleaned.includes('Download Our App'), 'Expected app download prompt to be stripped');
+		assert.ok(!cleaned.includes('100 S. Independence Mall West'), 'Expected corporate mailing address to be stripped');
+		assert.ok(!cleaned.includes('Unsubscribe'), 'Expected Unsubscribe footer link to be stripped');
 
 		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
 		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
@@ -87,9 +92,10 @@ async function runTests() {
 		assert.ok(cleaned.includes('Lifting up like-minded progressives'), 'Expected main story heading to be preserved');
 		assert.ok(cleaned.includes('What’s affecting Philly temps this summer'), 'Expected weather story to be preserved');
 		assert.ok(cleaned.includes('Pat Rakowski'), 'Expected reader story to be preserved');
+		assert.ok(cleaned.includes('Have a great day.'), 'Expected closing sign-off to be preserved');
 	});
 
-	await test('HTML Parser (cleanContent): moneystuff.html and patreon.html flatten deeply nested tables and strip all background colors and empty image links', async () => {
+	await test('HTML Parser (cleanContent): moneystuff.html and patreon.html flatten deeply nested tables and strip all background colors, footers, and action buttons while preserving footnotes', async () => {
 		for (const file of ['moneystuff.html', 'patreon.html']) {
 			const raw = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
 			const cleaned = cleanContent(raw);
@@ -117,16 +123,27 @@ async function runTests() {
 
 		const cleanedMoneyStuff = cleanContent(fs.readFileSync(path.resolve(process.cwd(), 'moneystuff.html'), 'utf8'));
 		assert.ok(!cleanedMoneyStuff.includes('View in browser'), 'Expected "View in browser" link to be removed from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes("If you'd like to get Money Stuff in handy email form"), 'Expected newsletter signup banner to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Follow Us'), 'Expected "Follow Us" footer to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Get the newsletter'), 'Expected "Get the newsletter" footer to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Bloomberg L.P. 731 Lexington'), 'Expected corporate mailing address to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Unsubscribe'), 'Expected Unsubscribe link to be stripped from moneystuff.html');
 		assert.ok(cleanedMoneyStuff.includes('Index demand'), 'Expected section heading in moneystuff.html');
 		assert.ok(cleanedMoneyStuff.includes('Universal/Pershing'), 'Expected second section heading in moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('Especially in my email inbox.'), 'Expected footnote [1] to be preserved in moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('I originally wrote'), 'Expected footnote [2] to be preserved in moneystuff.html');
 
 		const cleanedPatreon = cleanContent(fs.readFileSync(path.resolve(process.cwd(), 'patreon.html'), 'utf8'));
 		assert.ok(!cleanedPatreon.includes('View in app'), 'Expected "View in app" link to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('View page'), 'Expected "View page" CTA button to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('Did you like this post?'), 'Expected "Did you like this post?" prompt to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('600 Townsend Street'), 'Expected Patreon corporate mailing address to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('Manage your email settings'), 'Expected email settings footer link to be removed from patreon.html');
 		assert.ok(cleanedPatreon.includes('Chicago GO Fest Raid Train'), 'Expected post title in patreon.html');
 		assert.ok(cleanedPatreon.includes('Art Institute of Chicago'), 'Expected post body in patreon.html');
 	});
 
-	await test('HTML Parser (cleanContent): noahpinion.html unwraps embedded tweets, post cards, and heading/non-blue links while preserving inline links and full article text', async () => {
+	await test('HTML Parser (cleanContent): noahpinion.html unwraps embedded tweets, post cards, and heading/non-blue links while stripping Substack chrome and preserving inline links and footnotes', async () => {
 		const raw = fs.readFileSync(path.resolve(process.cwd(), 'noahpinion.html'), 'utf8');
 		const cleaned = cleanContent(raw);
 
@@ -145,6 +162,14 @@ async function runTests() {
 			0,
 			'Expected no remaining <img> tags in cleaned noahpinion.html'
 		);
+
+		// Verify Substack header/footer chrome and engagement buttons are stripped
+		assert.ok(!cleaned.includes('Forwarded this email?'), 'Expected "Forwarded this email?" top banner to be stripped');
+		assert.ok(!cleaned.includes('READ IN APP'), 'Expected "READ IN APP" button to be stripped');
+		assert.ok(!cleaned.includes('Subscribed'), 'Expected "Subscribed" button to be stripped');
+		assert.ok(!cleaned.includes('Restack'), 'Expected "Restack" action button to be stripped');
+		assert.ok(!cleaned.includes('548 Market Street'), 'Expected Substack 548 Market Street mailing address to be stripped');
+		assert.ok(!cleaned.includes('Unsubscribe'), 'Expected Substack Unsubscribe footer to be stripped');
 
 		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
 		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
@@ -168,15 +193,16 @@ async function runTests() {
 			);
 		}
 
-		// Verify key article content and embedded tweet text are preserved
+		// Verify key article content, embedded tweet text, and footnote 1 are preserved
 		assert.ok(cleaned.includes('What the AI boom is doing for Americans'), 'Expected article title to be preserved');
 		assert.ok(cleaned.includes('Paul Krugman is the greatest econ writer in the world'), 'Expected opening paragraph to be preserved');
 		assert.ok(cleaned.includes('Jason Furman'), 'Expected embedded tweet author to be preserved');
 		assert.ok(cleaned.includes('Investment in information processing equipment'), 'Expected embedded tweet body to be preserved');
 		assert.ok(cleaned.includes('an IT-driven productivity boom</a>'), 'Expected legitimate inline link to remain intact');
+		assert.ok(cleaned.includes('I’m kind of annoyed by the use of'), 'Expected footnote 1 at end of noahpinion.html to be preserved');
 	});
 
-	await test('HTML Parser (cleanContent): nyfocus.html (Mamdani and Unions) removes all odd backgrounds, light text styles, tables, and hidden bot links while preserving article text', async () => {
+	await test('HTML Parser (cleanContent): nyfocus.html (Mamdani and Unions) removes all odd backgrounds, light text styles, tables, CTA buttons, and Mailchimp footer while preserving article text', async () => {
 		const raw = fs.readFileSync(path.resolve(process.cwd(), 'nyfocus.html'), 'utf8');
 		const cleaned = cleanContent(raw);
 
@@ -196,6 +222,11 @@ async function runTests() {
 		assert.ok(!cleaned.includes('244, 244, 244'), 'Expected light rgb(244, 244, 244) text color to be stripped');
 		assert.ok(!cleaned.includes('Click this link if you are a bot'), 'Expected font-size:0 bot honeypot links to be stripped');
 		assert.ok(!cleaned.includes('View Email in Your Browser'), 'Expected "View Email in Your Browser" header link to be stripped');
+		assert.ok(!cleaned.includes('READ IN NEW YORK FOCUS'), 'Expected "READ IN NEW YORK FOCUS" CTA button to be stripped');
+		assert.ok(!cleaned.includes('SUPPORT NEW YORK JOURNALISM'), 'Expected "SUPPORT NEW YORK JOURNALISM" CTA button to be stripped');
+		assert.ok(!cleaned.includes('This email was sent to'), 'Expected Mailchimp recipient footer to be stripped');
+		assert.ok(!cleaned.includes('Copyright © New York Focus'), 'Expected copyright notice to be stripped');
+		assert.ok(!cleaned.includes('178 Columbus Ave #237190'), 'Expected NY Focus mailing address to be stripped');
 
 		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
 		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
@@ -217,13 +248,17 @@ async function runTests() {
 		);
 	});
 
-	await test('HTML Parser (cleanContent): unwraps <a> tags wrapping block content or left unclosed by ad blocks', async () => {
+	await test('HTML Parser (cleanContent): unwraps <a> tags wrapping block content and strips Substack RSS editor labels and subscribe widgets', async () => {
 		const brokenAdHtml = `
 			<div data-block="top-ad"><div>Advertisement</div><a href="https://ad.doubleclick.net/track"><div>Sponsored</div></div>
 			<table bgcolor="#D1E7F1"><tbody style="background:#eee"><tr style='background-color: #123456'><td bgcolor='#ff0'>
 				<p style="background-color: #EFF1F4;">Paragraph inside table and unclosed ad link with <a href="https://example.com/story">inline link</a>.</p>
 			</td></tr></tbody></table></a>
 			<a href="https://example.com/card"><div style="color:#000"><p>Card paragraph that would otherwise turn all blue</p></div></a>
+			<label contenteditable="false">Text within this block will maintain its original spacing when published</label>
+			<pre>Poetry or code block content</pre>
+			<p class="button-wrapper" data-component-name="ButtonCreateButton"><a class="button primary" href="https://example.substack.com/subscribe"><span>Subscribe now</span></a></p>
+			<div class="subscription-widget-wrap-editor" data-component-name="SubscribeWidgetToDOM"><div class="subscription-widget show-subscribe"><div class="preamble"><p class="cta-caption">Thanks for reading Example Substack! Subscribe for free to receive new posts.</p></div></div></div>
 		`;
 		const cleaned = cleanContent(brokenAdHtml);
 
@@ -233,6 +268,11 @@ async function runTests() {
 		assert.strictEqual((cleaned.match(/<\/a>/gi) || []).length, 1, 'Expected only 1 closing </a> tag to remain');
 		assert.ok(cleaned.includes('<a href="https://example.com/story">inline link</a>'), 'Expected valid inline link to remain intact');
 		assert.ok(cleaned.includes('<p>Card paragraph that would otherwise turn all blue</p>'), 'Expected unwrapped card paragraph content to remain intact');
+		assert.ok(cleaned.includes('<pre>Poetry or code block content</pre>'), 'Expected <pre> block content to remain intact');
+		assert.ok(!cleaned.includes('Text within this block will maintain its original spacing when published'), 'Expected Substack <pre> editor label to be stripped');
+		assert.ok(!cleaned.includes('Subscribe now'), 'Expected Substack ButtonCreateButton CTA to be stripped');
+		assert.ok(!cleaned.includes('SubscribeWidgetToDOM'), 'Expected Substack SubscribeWidgetToDOM block to be stripped');
+		assert.ok(!cleaned.includes('Thanks for reading Example Substack!'), 'Expected Substack subscribe widget preamble to be stripped');
 	});
 
 	if (instapaperToken) {
