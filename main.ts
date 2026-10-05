@@ -161,7 +161,10 @@ function generateGroupedArticlesMarkdown(
 		for (const a of validArticles) {
 			totalArticles++;
 			const title = a.title.trim();
-			markdownContent += `- [${title}](${a.primaryUrl})\n`;
+			markdownContent += `- [[${title}]]\n`;
+			if (a.primaryUrl) {
+				markdownContent += `    - **URL**: [${a.primaryUrl}](${a.primaryUrl})\n`;
+			}
 			if (a.date) {
 				const label = a.dateLabel || groupDateLabel;
 				markdownContent += `    - **${label}**: ${a.date}\n`;
