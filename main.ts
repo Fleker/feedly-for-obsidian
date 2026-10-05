@@ -427,39 +427,117 @@ author: ${sanitizeFrontmatter(rawAuthor)}` : ''}
 	return out
 }
 
-function cleanContent(html: string) {
+function sanitizeLinks(html: string): string {
+	const tokenRegex = /<\/?a\b[^>]*>/gi;
+	const tokens: { tag: string; start: number; end: number; isClose: boolean }[] = [];
+	let match: RegExpExecArray | null;
+	while ((match = tokenRegex.exec(html)) !== null) {
+		tokens.push({
+			tag: match[0],
+			start: match.index,
+			end: match.index + match[0].length,
+			isClose: /^<\/a/i.test(match[0]),
+		});
+	}
+	if (tokens.length === 0) return html;
+
+	const blockTagRegex = /<\/?(div|p|table|tbody|thead|tfoot|tr|td|th|ul|ol|li|blockquote|figcaption|h[1-6]|section|article|header|footer)\b/i;
+	const nonBlueLinkStyleRegex = /\bdisplay\s*:\s*block\b|(?=[^>]*\btext-decoration\s*:\s*none\b)(?=[^>]*\bcolor\s*:\s*(?:inherit|#363737|#191919|#000(?:000)?|rgb\(\s*(?:54\s*,\s*55\s*,\s*55|119\s*,\s*119\s*,\s*119|25\s*,\s*25\s*,\s*25|0\s*,\s*0\s*,\s*0)\s*\)))/i;
+	let result = '';
+	let cursor = 0;
+	let i = 0;
+
+	while (i < tokens.length) {
+		const token = tokens[i];
+		result += html.slice(cursor, token.start);
+
+		if (token.isClose) {
+			// Drop orphaned closing </a> tags
+			cursor = token.end;
+			i++;
+			continue;
+		}
+
+		const next = tokens[i + 1];
+		if (!next || !next.isClose) {
+			// Drop unclosed <a ...> tags that precede another <a ...> or end of document
+			cursor = token.end;
+			i++;
+			continue;
+		}
+
+		const inner = html.slice(token.end, next.start);
+		const textOnly = inner.replace(/<[^>]*>/g, '').replace(/[\s\u200A-\u200D\uFEFF]+/g, '');
+		if (textOnly.length === 0) {
+			// Drop empty links (e.g. links that only contained an <img>)
+			cursor = next.end;
+			i += 2;
+		} else if (blockTagRegex.test(inner) || nonBlueLinkStyleRegex.test(token.tag)) {
+			// Unwrap <a> tags that wrap block-level elements or are styled as non-blue block/text cards
+			result += inner;
+			cursor = next.end;
+			i += 2;
+		} else {
+			result += token.tag + inner + next.tag;
+			cursor = next.end;
+			i += 2;
+		}
+	}
+
+	result += html.slice(cursor);
+	return result;
+}
+
+export function cleanContent(html: string) {
 	if (!html) return html;
 
 	let content = html;
 
-	// 1. Remove preheaders and display:none blocks which often contain preview text we don't want in the body
-	content = content.replace(/<div[^>]*display\s*:\s*none[^>]*>[\s\S]*?<\/div>/gi, '');
+	// 1. Remove preheaders, display:none blocks, and zero-font hidden spans (e.g. bot honeypots, preview text)
+	content = content.replace(/<(div|span|p|tr|td|a)\b[^>]*\bdisplay\s*:\s*none\b[^>]*>(?:(?!<\1\b)[\s\S])*?<\/\1>/gi, '');
+	content = content.replace(/<span\b[^>]*\bfont-size\s*:\s*0(?:px)?(?:\s*;|\s*["'])[^>]*>[^<]*<\/span>/gi, '');
 
 	// 2. Remove known ad and social blocks
 	content = content.replace(/<div[^>]*data-block="(top-ad|ad|social)"[^>]*>[\s\S]*?<\/div>/gi, '');
 
-	// 3. Remove "View in browser" links and similar noise
-	content = content.replace(/<a[^>]*>[^<]*View in browser[^<]*<\/a>/gi, '');
-	content = content.replace(/<a[^>]*>[^<]*View on [^<]*<\/a>/gi, '');
+	// 3. Remove "View in browser", "View Email in Your Browser", "View on ...", "View in app", "Read in app" links
+	content = content.replace(/View on\s*<a\b[^>]*>[\s\S]*?<\/a>/gi, '');
+	content = content.replace(
+		/<a\b[^>]*>(?:<[^>]*>|\s)*(?:View in browser|View email in your browser|View on |View in app|Read in app)(?:<[^>]*>|\s)*<\/a>/gi,
+		''
+	);
 
-	// 4. Flatten Tables
-	// We replace table tags with nothing, and td/tr with divs to keep the flow
-	for (let i = 0; i < 3; i++) {
-		content = content
-			.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, '$1')
-			.replace(/<tbody[^>]*>([\s\S]*?)<\/tbody>/gi, '$1')
-			.replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, '<div>$1</div>')
-			.replace(/<td[^>]*>([\s\S]*?)<\/td>/gi, '<div>$1</div>');
+	// 4. Remove all images, picture/source wrappers, and inline SVGs
+	content = content
+		.replace(/<img\b[\s\S]*?>/gi, '')
+		.replace(/<\/?(?:picture|source)\b[^>]*>/gi, '')
+		.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
+
+	// 5. Flatten all tables and <center> wrappers completely regardless of nesting depth
+	// We replace table structural tags with nothing, and tr/td/th with divs to keep the flow
+	content = content
+		.replace(/<\/?(table|tbody|thead|tfoot|colgroup|col|center)\b[^>]*>/gi, '')
+		.replace(/<(tr|td|th)\b[^>]*>/gi, '<div>')
+		.replace(/<\/(tr|td|th)>/gi, '</div>');
+
+	// 6. Unwrap heading-wrapped links and sanitize links (before stripping style so non-blue card/title links are detected)
+	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b[^>]*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
+	content = sanitizeLinks(content);
+
+	// 7. Strip all inline style, bgcolor, and align attributes that cause odd backgrounds or broken e-reader styling
+	content = content
+		.replace(/\s*\bstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+		.replace(/\s*\bbgcolor\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+		.replace(/\s*\balign\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+
+	// 8. Final cleanup of empty spans, paragraphs, figures, headings, and divs
+	content = content.replace(/<span\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/span>/gi, '');
+	content = content.replace(/<(p|figure|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
+	for (let i = 0; i < 4; i++) {
+		content = content.replace(/<div\b[^>]*>(?:[\s\u200A-\u200D\uFEFF]|<br\s*\/?>)*<\/div>/gi, '');
 	}
 
-	// 5. Strip overly complex inline styles that interfere with e-reader rendering
-	content = content.replace(/style="[^"]{40,}"/gi, '');
-
-	// 6. Final cleanup
-	return content
-		.replace(/<img .*?>/g, '') // Remove images
-		.replace(/<div>\s*<\/div>/gi, '') // Remove empty divs
-		.trim();
+	return content.trim();
 }
 function getContent(article: FeedlyArticle) {
 	const contents = [
