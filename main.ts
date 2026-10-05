@@ -385,8 +385,7 @@ instapaperUrl: https://www.instapaper.com/read/${id}
 title: ${title}
 saveDate: ${saveDate}${pubDate ? `
 pubDate: ${pubDate}` : ''}${rawAuthor ? `
-author: ${sanitizeFrontmatter(rawAuthor)}` : ''}${b.description ? `
-description: ${sanitizeFrontmatter(b.description)}` : ''}
+author: ${sanitizeFrontmatter(rawAuthor)}` : ''}
 ---</pre>
 <div>${content}</div>`
 					results[index] = { 
