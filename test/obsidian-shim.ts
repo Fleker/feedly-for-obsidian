@@ -27,6 +27,13 @@ export class Notice {
 	hide(): void {}
 }
 
+export class Plugin {}
+export class PluginSettingTab {}
+export class Setting {}
+export function normalizePath(p: string): string {
+	return p;
+}
+
 export async function requestUrl(request: RequestUrlParam | string): Promise<RequestUrlResponse> {
 	const param: RequestUrlParam = typeof request === 'string' ? { url: request } : request;
 	const headers: Record<string, string> = { ...(param.headers ?? {}) };

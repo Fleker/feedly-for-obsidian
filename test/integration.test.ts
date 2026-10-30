@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as assert from 'assert';
 import { InstapaperClient } from '../instapaper';
+import { cleanContent } from '../main';
 import { requestUrl } from 'obsidian';
 
 function loadDotEnv() {
@@ -34,13 +35,6 @@ async function runTests() {
 	const feedlyToken = process.env.FEEDLY_ACCESS_TOKEN?.trim();
 	const feedlyUserId = process.env.FEEDLY_USER_ID?.trim();
 
-	if (!instapaperToken && !feedlyToken) {
-		console.error(
-			'No access tokens found. Copy .env.example to .env and set INSTAPAPER_ACCESS_TOKEN and/or FEEDLY_ACCESS_TOKEN.'
-		);
-		process.exit(1);
-	}
-
 	let passed = 0;
 	let failed = 0;
 
@@ -55,6 +49,231 @@ async function runTests() {
 			failed++;
 		}
 	}
+
+	await test('HTML Parser (cleanContent): philly.html removes all tables, backgrounds/styles, and unclosed/block-wrapping links while preserving article text and inline links', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'philly.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.strictEqual(
+			(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th)\b/gi) || []).length,
+			0,
+			'Expected no remaining table/tbody/tr/td tags in cleaned philly.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining inline style or bgcolor attributes in cleaned philly.html'
+		);
+		assert.ok(!cleaned.includes('#D1E7F1'), 'Expected #D1E7F1 callout background color to be stripped');
+		assert.ok(!cleaned.includes('And a glimpse of what summer has in store'), 'Expected display:none preheader to be stripped');
+		assert.ok(!cleaned.includes('View on'), 'Expected "View on inquirer.com" header noise to be stripped');
+		assert.ok(!cleaned.includes('If someone forwarded you this email'), 'Expected forwarded-email signup banner to be stripped');
+		assert.ok(!cleaned.includes('By submitting your written, visual'), 'Expected legal submission disclaimer to be stripped');
+		assert.ok(!cleaned.includes('Download Our App'), 'Expected app download prompt to be stripped');
+		assert.ok(!cleaned.includes('100 S. Independence Mall West'), 'Expected corporate mailing address to be stripped');
+		assert.ok(!cleaned.includes('Unsubscribe'), 'Expected Unsubscribe footer link to be stripped');
+
+		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+		assert.strictEqual(openLinks, closeLinks, 'Expected balanced <a> and </a> tags in cleaned philly.html');
+		assert.ok(openLinks > 0, 'Expected legitimate inline article links to be preserved');
+
+		// Verify no <a> tag wraps block elements or spans across paragraphs
+		const linkBlocks = cleaned.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || [];
+		for (const link of linkBlocks) {
+			assert.ok(
+				!/<\/?(div|p|table|ul|ol|li|blockquote|figcaption|h[1-6])\b/i.test(link),
+				`Expected <a> tag not to wrap block elements: ${link.slice(0, 100)}`
+			);
+		}
+
+		// Verify key article content is intact
+		assert.ok(cleaned.includes('Good morning, Philly!'), 'Expected opening greeting to be preserved');
+		assert.ok(cleaned.includes('Lifting up like-minded progressives'), 'Expected main story heading to be preserved');
+		assert.ok(cleaned.includes('What’s affecting Philly temps this summer'), 'Expected weather story to be preserved');
+		assert.ok(cleaned.includes('Pat Rakowski'), 'Expected reader story to be preserved');
+		assert.ok(cleaned.includes('Have a great day.'), 'Expected closing sign-off to be preserved');
+	});
+
+	await test('HTML Parser (cleanContent): moneystuff.html and patreon.html flatten deeply nested tables and strip all background colors, footers, and action buttons while preserving footnotes', async () => {
+		for (const file of ['moneystuff.html', 'patreon.html']) {
+			const raw = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
+			const cleaned = cleanContent(raw);
+
+			assert.strictEqual(
+				(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th)\b/gi) || []).length,
+				0,
+				`Expected no remaining table tags in ${file}`
+			);
+			assert.strictEqual(
+				(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+				0,
+				`Expected no remaining style or bgcolor attributes in ${file}`
+			);
+			assert.strictEqual(
+				(cleaned.match(/<img\b/gi) || []).length,
+				0,
+				`Expected no remaining <img> tags in ${file}`
+			);
+
+			const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+			const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+			assert.strictEqual(openLinks, closeLinks, `Expected balanced <a> and </a> tags in ${file}`);
+		}
+
+		const cleanedMoneyStuff = cleanContent(fs.readFileSync(path.resolve(process.cwd(), 'moneystuff.html'), 'utf8'));
+		assert.ok(!cleanedMoneyStuff.includes('View in browser'), 'Expected "View in browser" link to be removed from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes("If you'd like to get Money Stuff in handy email form"), 'Expected newsletter signup banner to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Follow Us'), 'Expected "Follow Us" footer to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Get the newsletter'), 'Expected "Get the newsletter" footer to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Bloomberg L.P. 731 Lexington'), 'Expected corporate mailing address to be stripped from moneystuff.html');
+		assert.ok(!cleanedMoneyStuff.includes('Unsubscribe'), 'Expected Unsubscribe link to be stripped from moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('Index demand'), 'Expected section heading in moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('Universal/Pershing'), 'Expected second section heading in moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('Especially in my email inbox.'), 'Expected footnote [1] to be preserved in moneystuff.html');
+		assert.ok(cleanedMoneyStuff.includes('I originally wrote'), 'Expected footnote [2] to be preserved in moneystuff.html');
+
+		const cleanedPatreon = cleanContent(fs.readFileSync(path.resolve(process.cwd(), 'patreon.html'), 'utf8'));
+		assert.ok(!cleanedPatreon.includes('View in app'), 'Expected "View in app" link to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('View page'), 'Expected "View page" CTA button to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('Did you like this post?'), 'Expected "Did you like this post?" prompt to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('600 Townsend Street'), 'Expected Patreon corporate mailing address to be removed from patreon.html');
+		assert.ok(!cleanedPatreon.includes('Manage your email settings'), 'Expected email settings footer link to be removed from patreon.html');
+		assert.ok(cleanedPatreon.includes('Chicago GO Fest Raid Train'), 'Expected post title in patreon.html');
+		assert.ok(cleanedPatreon.includes('Art Institute of Chicago'), 'Expected post body in patreon.html');
+	});
+
+	await test('HTML Parser (cleanContent): noahpinion.html unwraps embedded tweets, post cards, and heading/non-blue links while stripping Substack chrome and preserving inline links and footnotes', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'noahpinion.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.strictEqual(
+			(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th|picture|source|svg)\b/gi) || []).length,
+			0,
+			'Expected no remaining table, picture, source, or svg tags in cleaned noahpinion.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining inline style or bgcolor attributes in cleaned noahpinion.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/<img\b/gi) || []).length,
+			0,
+			'Expected no remaining <img> tags in cleaned noahpinion.html'
+		);
+
+		// Verify Substack header/footer chrome and engagement buttons are stripped
+		assert.ok(!cleaned.includes('Forwarded this email?'), 'Expected "Forwarded this email?" top banner to be stripped');
+		assert.ok(!cleaned.includes('READ IN APP'), 'Expected "READ IN APP" button to be stripped');
+		assert.ok(!cleaned.includes('Subscribed'), 'Expected "Subscribed" button to be stripped');
+		assert.ok(!cleaned.includes('Restack'), 'Expected "Restack" action button to be stripped');
+		assert.ok(!cleaned.includes('548 Market Street'), 'Expected Substack 548 Market Street mailing address to be stripped');
+		assert.ok(!cleaned.includes('Unsubscribe'), 'Expected Substack Unsubscribe footer to be stripped');
+
+		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+		assert.strictEqual(openLinks, closeLinks, 'Expected balanced <a> and </a> tags in cleaned noahpinion.html');
+		assert.ok(openLinks >= 35, `Expected inline article links to be preserved (found ${openLinks})`);
+
+		// Verify embedded tweet (Jason Furman), embedded Substack card, and article title are NOT wrapped in <a> tags
+		const linkBlocks = cleaned.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || [];
+		for (const link of linkBlocks) {
+			assert.ok(
+				!/<\/?(div|p|table|ul|ol|li|blockquote|figcaption|h[1-6])\b/i.test(link),
+				`Expected <a> tag not to wrap block elements in noahpinion.html: ${link.slice(0, 100)}`
+			);
+			assert.ok(
+				!link.includes('Jason Furman'),
+				'Expected embedded tweet not to remain wrapped in a link that turns it blue'
+			);
+			assert.ok(
+				!link.includes('One More Reason Americans Hate AI'),
+				'Expected embedded Substack card title not to remain wrapped in a blue link'
+			);
+		}
+
+		// Verify key article content, embedded tweet text, and footnote 1 are preserved
+		assert.ok(cleaned.includes('What the AI boom is doing for Americans'), 'Expected article title to be preserved');
+		assert.ok(cleaned.includes('Paul Krugman is the greatest econ writer in the world'), 'Expected opening paragraph to be preserved');
+		assert.ok(cleaned.includes('Jason Furman'), 'Expected embedded tweet author to be preserved');
+		assert.ok(cleaned.includes('Investment in information processing equipment'), 'Expected embedded tweet body to be preserved');
+		assert.ok(cleaned.includes('an IT-driven productivity boom</a>'), 'Expected legitimate inline link to remain intact');
+		assert.ok(cleaned.includes('I’m kind of annoyed by the use of'), 'Expected footnote 1 at end of noahpinion.html to be preserved');
+	});
+
+	await test('HTML Parser (cleanContent): nyfocus.html (Mamdani and Unions) removes all odd backgrounds, light text styles, tables, CTA buttons, and Mailchimp footer while preserving article text', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'nyfocus.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.strictEqual(
+			(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th|center)\b/gi) || []).length,
+			0,
+			'Expected no remaining table or center tags in cleaned nyfocus.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining style or bgcolor attributes in cleaned nyfocus.html'
+		);
+		assert.ok(!cleaned.includes('#0c2329'), 'Expected dark #0c2329 background color to be stripped');
+		assert.ok(!cleaned.includes('#f8bd47'), 'Expected yellow #f8bd47 background color to be stripped');
+		assert.ok(!cleaned.includes('background-color:#237190'), 'Expected blue #237190 background color to be stripped');
+		assert.ok(!cleaned.includes('244, 244, 244'), 'Expected light rgb(244, 244, 244) text color to be stripped');
+		assert.ok(!cleaned.includes('Click this link if you are a bot'), 'Expected font-size:0 bot honeypot links to be stripped');
+		assert.ok(!cleaned.includes('View Email in Your Browser'), 'Expected "View Email in Your Browser" header link to be stripped');
+		assert.ok(!cleaned.includes('READ IN NEW YORK FOCUS'), 'Expected "READ IN NEW YORK FOCUS" CTA button to be stripped');
+		assert.ok(!cleaned.includes('SUPPORT NEW YORK JOURNALISM'), 'Expected "SUPPORT NEW YORK JOURNALISM" CTA button to be stripped');
+		assert.ok(!cleaned.includes('This email was sent to'), 'Expected Mailchimp recipient footer to be stripped');
+		assert.ok(!cleaned.includes('Copyright © New York Focus'), 'Expected copyright notice to be stripped');
+		assert.ok(!cleaned.includes('178 Columbus Ave #237190'), 'Expected NY Focus mailing address to be stripped');
+
+		const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+		const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+		assert.strictEqual(openLinks, closeLinks, 'Expected balanced <a> and </a> tags in cleaned nyfocus.html');
+		assert.ok(openLinks > 0, 'Expected legitimate inline links to be preserved in nyfocus.html');
+
+		// Verify key Mamdani & Unions article content is preserved
+		assert.ok(
+			cleaned.includes('EXCLUSIVE: Mamdani Enlists Unions in Push to Overhaul NYC Hiring'),
+			'Expected Mamdani & Unions headline to be preserved'
+		);
+		assert.ok(
+			cleaned.includes('Mayor Zohran Mamdani plans to take a swing at one of New York City’s most intractable problems'),
+			'Expected Mamdani & Unions lead paragraph to be preserved'
+		);
+		assert.ok(
+			cleaned.includes('12-person group of city officials and labor leaders'),
+			'Expected Mamdani & Unions body paragraph to be preserved'
+		);
+	});
+
+	await test('HTML Parser (cleanContent): unwraps <a> tags wrapping block content and strips Substack RSS editor labels and subscribe widgets', async () => {
+		const brokenAdHtml = `
+			<div data-block="top-ad"><div>Advertisement</div><a href="https://ad.doubleclick.net/track"><div>Sponsored</div></div>
+			<table bgcolor="#D1E7F1"><tbody style="background:#eee"><tr style='background-color: #123456'><td bgcolor='#ff0'>
+				<p style="background-color: #EFF1F4;">Paragraph inside table and unclosed ad link with <a href="https://example.com/story">inline link</a>.</p>
+			</td></tr></tbody></table></a>
+			<a href="https://example.com/card"><div style="color:#000"><p>Card paragraph that would otherwise turn all blue</p></div></a>
+			<label contenteditable="false">Text within this block will maintain its original spacing when published</label>
+			<pre>Poetry or code block content</pre>
+			<p class="button-wrapper" data-component-name="ButtonCreateButton"><a class="button primary" href="https://example.substack.com/subscribe"><span>Subscribe now</span></a></p>
+			<div class="subscription-widget-wrap-editor" data-component-name="SubscribeWidgetToDOM"><div class="subscription-widget show-subscribe"><div class="preamble"><p class="cta-caption">Thanks for reading Example Substack! Subscribe for free to receive new posts.</p></div></div></div>
+		`;
+		const cleaned = cleanContent(brokenAdHtml);
+
+		assert.strictEqual((cleaned.match(/<\/?(table|tbody|tr|td)\b/gi) || []).length, 0, 'Expected tables to be flattened');
+		assert.strictEqual((cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length, 0, 'Expected all style and bgcolor attributes to be removed');
+		assert.strictEqual((cleaned.match(/<a\b[^>]*>/gi) || []).length, 1, 'Expected only the 1 valid inline link to remain');
+		assert.strictEqual((cleaned.match(/<\/a>/gi) || []).length, 1, 'Expected only 1 closing </a> tag to remain');
+		assert.ok(cleaned.includes('<a href="https://example.com/story">inline link</a>'), 'Expected valid inline link to remain intact');
+		assert.ok(cleaned.includes('<p>Card paragraph that would otherwise turn all blue</p>'), 'Expected unwrapped card paragraph content to remain intact');
+		assert.ok(cleaned.includes('<pre>Poetry or code block content</pre>'), 'Expected <pre> block content to remain intact');
+		assert.ok(!cleaned.includes('Text within this block will maintain its original spacing when published'), 'Expected Substack <pre> editor label to be stripped');
+		assert.ok(!cleaned.includes('Subscribe now'), 'Expected Substack ButtonCreateButton CTA to be stripped');
+		assert.ok(!cleaned.includes('SubscribeWidgetToDOM'), 'Expected Substack SubscribeWidgetToDOM block to be stripped');
+		assert.ok(!cleaned.includes('Thanks for reading Example Substack!'), 'Expected Substack subscribe widget preamble to be stripped');
+	});
 
 	if (instapaperToken) {
 		const client = new InstapaperClient(instapaperToken);
@@ -88,7 +307,7 @@ async function runTests() {
 					typeof first.pubtime === 'number' || first.pubtime === null,
 					'Bookmark pubtime should be a Unix timestamp or null'
 				);
-				sampleBookmark = first;
+				sampleBookmark = list.bookmarks.find((b) => b.author && b.pubtime) ?? first;
 			}
 		});
 
@@ -142,10 +361,10 @@ async function runTests() {
 		});
 
 		if (feedlyUserId) {
-			await test('Feedly API: /v3/streams/contents returns valid stream items', async () => {
+			await test('Feedly API: /v3/streams/contents returns valid stream items and cleanContent sanitizes their HTML', async () => {
 				const streamId = encodeURIComponent(`user/${feedlyUserId}/category/global.all`);
 				const res = await requestUrl({
-					url: `https://cloud.feedly.com/v3/streams/contents?streamId=${streamId}&count=5`,
+					url: `https://cloud.feedly.com/v3/streams/contents?streamId=${streamId}&count=10`,
 					method: 'GET',
 					headers: {
 						Authorization: `Bearer ${feedlyToken}`,
@@ -153,6 +372,29 @@ async function runTests() {
 				});
 				assert.strictEqual(res.status, 200, 'Expected 200 OK from Feedly stream');
 				assert.ok(Array.isArray(res.json?.items), 'Expected items array in Feedly stream response');
+
+				for (const item of res.json.items) {
+					const html = item?.content?.content || item?.summary?.content || item?.fullContent;
+					if (!html) continue;
+					const cleaned = cleanContent(html);
+					assert.strictEqual(
+						(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th)\b/gi) || []).length,
+						0,
+						`Expected no remaining table tags in cleaned Feedly article "${item.title}"`
+					);
+					assert.strictEqual(
+						(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+						0,
+						`Expected no remaining inline style or bgcolor attributes in cleaned Feedly article "${item.title}"`
+					);
+					const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+					const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+					assert.strictEqual(
+						openLinks,
+						closeLinks,
+						`Expected balanced <a> and </a> tags in cleaned Feedly article "${item.title}"`
+					);
+				}
 			});
 		}
 	} else {
