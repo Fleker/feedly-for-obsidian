@@ -3,7 +3,7 @@ import { InstapaperBookmark, InstapaperClient } from './instapaper';
 import nodepub, { NodepubFile } from 'nodepub';
 import JSZip from 'jszip';
 
-interface FeedlyArticle {
+export interface FeedlyArticle {
 	id: string;
 	title: string;
 	author?: string;
@@ -493,6 +493,10 @@ export function cleanContent(html: string) {
 
 	let content = html;
 
+	// 0. Remove <style> and <link rel="stylesheet"> tags so embedded CSS from email newsletters cannot leak into EPUB or force page breaks
+	content = content.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+	content = content.replace(/<link\b[^>]*\brel=["']?stylesheet["']?[^>]*>/gi, '');
+
 	// 1. Remove preheaders, display:none blocks, and zero-font hidden spans (e.g. Mailchimp bot honeypots, preview text)
 	content = content.replace(/<(div|span|p|tr|td|a)\b[^>]*\bdisplay\s*:\s*none\b[^>]*>(?:(?!<\1\b)[\s\S])*?<\/\1>/gi, '');
 	content = content.replace(/<span\b[^>]*\bfont-size\s*:\s*0(?:px)?(?:\s*;|\s*["'])[^>]*>[^<]*<\/span>/gi, '');
@@ -548,7 +552,7 @@ export function cleanContent(html: string) {
 		.replace(/<p\b[^>]*>\s*©\s*\d{4}\b(?:(?!<\/p>)[\s\S])*?(?:548 Market Street|Unsubscribe)(?:(?!<\/p>)[\s\S])*?<\/p>/gi, '')
 		// Forwarded-email banners, newsletter signup CTAs, sponsorship blurbs, legal notices, and mailing address paragraphs
 		.replace(
-			/<p\b[^>]*>(?:(?!<\/p>)[\s\S])*?(?:If someone forwarded you this email|If you'd like to get\s+Money\s+Stuff\s+in handy email form|Thanks for reading [^<]*!|By submitting your written, visual, and\/or audio contributions|Interested in sponsoring (?:an Inquirer newsletter|these emails)\?|Download Our App\b|Written communications concerning this mailing may be directed to|100 S\.\s*Independence Mall West|©\s*Copyright \d{4}|Copyright © [^\n<]*All Rights Reserved|178 Columbus Ave #237190|This email was sent to\b|Want to manage which newsletters you receive\?)(?:(?!<\/p>)[\s\S])*?<\/p>/gi,
+			/<p\b[^>]*>(?:(?!<\/p>)[\s\S])*?(?:If someone forwarded you this email|If you'd like to get\s+Money\s+Stuff\s+in handy email form|Thanks for reading [^<]*!|By submitting your written, visual, and\/or audio contributions|Interested in sponsoring (?:an Inquirer newsletter|these emails)\?|Download Our App\b|Written communications concerning this mailing may be directed to|100 S\.\s*Independence Mall West|©\s*Copyright \d{4}|Copyright © [^\n<]*All Rights Reserved|178 Columbus Ave #237190|This email was sent to\b|Want to manage which newsletters you receive\?|You received this email because you opted into the Medium Daily Digest|Adjust your digest preferences|Medium,\s*548 Market St)(?:(?!<\/p>)[\s\S])*?<\/p>/gi,
 			''
 		);
 
@@ -558,7 +562,7 @@ export function cleanContent(html: string) {
 
 	// 8. Strip all inline style, bgcolor, and align attributes that cause odd backgrounds or broken e-reader styling
 	content = content
-		.replace(/\s*\bstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+		.replace(/\s*\bstyle\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
 		.replace(/\s*\bbgcolor\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
 		.replace(/\s*\balign\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 
@@ -571,7 +575,7 @@ export function cleanContent(html: string) {
 
 	return content.trim();
 }
-function getContent(article: FeedlyArticle) {
+export function getContent(article: FeedlyArticle) {
 	const contents = [
 		article?.content?.content,
 		article?.summary?.content,
@@ -583,6 +587,112 @@ function getContent(article: FeedlyArticle) {
 		return cleanContent(contents.sort((a, b) => b.length - a.length)[0])
 	}
 }
+
+export function isMediumDailyDigest(article: FeedlyArticle): boolean {
+	const origin = (article.origin?.title ?? '').toLowerCase();
+	const title = (article.title ?? '').toLowerCase();
+	return (
+		origin.includes('medium daily digest') ||
+		(origin.includes('medium') && origin.includes('digest')) ||
+		title.includes('medium daily digest')
+	);
+}
+
+export function formatArticleSection(x: FeedlyArticle): { title: string; author?: string; data: string } {
+	let data = `<h2>${x.title}</h2>
+<pre>---${x.canonicalUrl ? `
+url: ${x.canonicalUrl}` : ''}
+feedlyUrl: https://feedly.com/i/entry/${x.id}
+title: ${x.title}
+pubDate: ${dateToJournal(new Date(x.published ?? x.crawled ?? 0))}
+author: ${sanitizeFrontmatter(x.author ?? x.origin?.title ?? '')}${x.origin?.title ? `
+publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
+---</pre>
+
+`;
+	const content = getContent(x);
+	if (content) {
+		data += `
+<div>
+${content}
+</div>
+`;
+	}
+
+	return {
+		title: x.title,
+		author: x.author,
+		data,
+	};
+}
+
+export function formatDigestSection(digestArticles: FeedlyArticle[]): { title: string; author?: string; data: string } {
+	const first = digestArticles[0];
+	const digestTitle = first.origin?.title || 'Medium Daily Digest';
+	const digestPubDate = first.published ?? first.crawled ?? 0;
+	let data = `<h2>${digestTitle}</h2>
+<pre>---
+title: ${digestTitle}
+pubDate: ${dateToJournal(new Date(digestPubDate))}
+publisher: ${sanitizeFrontmatter(digestTitle)}
+---</pre>
+
+`;
+
+	for (let i = 0; i < digestArticles.length; i++) {
+		const item = digestArticles[i];
+		const itemContent = getContent(item);
+		data += `<div class="digest-article">
+<h3>${item.title}</h3>
+<pre>---${item.canonicalUrl ? `
+url: ${item.canonicalUrl}` : ''}
+feedlyUrl: https://feedly.com/i/entry/${item.id}
+title: ${item.title}
+pubDate: ${dateToJournal(new Date(item.published ?? item.crawled ?? 0))}
+author: ${sanitizeFrontmatter(item.author ?? item.origin?.title ?? '')}
+---</pre>
+${itemContent ? `<div>\n${itemContent}\n</div>` : ''}
+</div>\n`;
+		if (i < digestArticles.length - 1) {
+			data += `<hr/>\n`;
+		}
+	}
+
+	return {
+		title: digestTitle,
+		author: 'Medium',
+		data,
+	};
+}
+
+export function groupArticlesForEpub(articles: FeedlyArticle[]): { title: string; author?: string; data: string }[] {
+	const out: { title: string; author?: string; data: string }[] = [];
+	const digestArticles: FeedlyArticle[] = [];
+	let digestIndex = -1;
+
+	for (const article of articles) {
+		if (isMediumDailyDigest(article)) {
+			if (digestIndex === -1) {
+				digestIndex = out.length;
+				out.push({ title: '', data: '' });
+			}
+			digestArticles.push(article);
+		} else {
+			out.push(formatArticleSection(article));
+		}
+	}
+
+	if (digestArticles.length > 0) {
+		if (digestArticles.length === 1) {
+			out[digestIndex] = formatArticleSection(digestArticles[0]);
+		} else {
+			out[digestIndex] = formatDigestSection(digestArticles);
+		}
+	}
+
+	return out;
+}
+
 interface GenerateEpubParams {
     id: string
     title: string
@@ -604,7 +714,10 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
         author: params.author,
         cover: params.cover,
     })
-    bookFile.addCSS(`img { display: none; width: 0px; height: 0px }`)
+    bookFile.addCSS(`img { display: none; width: 0px; height: 0px }
+h1, h2, h3, h4, h5, h6 { page-break-before: auto !important; break-before: auto !important; page-break-after: avoid !important; break-after: avoid !important; }
+.digest-article { margin-bottom: 2em; page-break-inside: auto; break-inside: auto; }
+hr { border: 0; border-top: 1px solid #ccc; margin: 2em 0; page-break-after: auto; break-after: auto; }`)
     let i = 0
     for (const c of params.content) {
         bookFile.addSection(`${++i}. ${c.title}`, c.data)
@@ -852,35 +965,7 @@ export default class FeedlyPlugin extends Plugin {
 					})
 				console.log(articlesToExport.length, 'filter-items')
 
-				const contents = articlesToExport
-                    .map(x => {
-                    let data = 
-    `<h2>${x.title}</h2>
-<pre>---${x.canonicalUrl ? `
-url: ${x.canonicalUrl}` : ''}
-feedlyUrl: https://feedly.com/i/entry/${x.id}
-title: ${x.title}
-pubDate: ${dateToJournal(new Date(x.published ?? x.crawled ?? 0))}
-author: ${sanitizeFrontmatter(x.author ?? x.origin?.title ?? '')}${x.origin?.title ? `
-publisher: ${sanitizeFrontmatter(x.origin.title)}` : ''}
----</pre>
-
-`
-                    if (getContent(x)) {
-                    data += `
-                        <div>
-                        ${getContent(x)}
-                        </div>
-                    `
-                    }
-
-                    return {
-                        title: x.title,
-                        author: x.author,
-                        data,
-                        css: "img { display: none; width: 0px; height: 0px; }"
-                    }
-                })
+				const contents = groupArticlesForEpub(articlesToExport);
 
 				let totalArticles = articlesToExport.length
 				// Include Instapaper articles if credentials are configured

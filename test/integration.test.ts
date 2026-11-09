@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as assert from 'assert';
 import { InstapaperClient } from '../instapaper';
-import { cleanContent } from '../main';
+import { cleanContent, isMediumDailyDigest, groupArticlesForEpub, FeedlyArticle } from '../main';
 import { requestUrl } from 'obsidian';
 
 function loadDotEnv() {
@@ -273,6 +273,119 @@ async function runTests() {
 		assert.ok(!cleaned.includes('Subscribe now'), 'Expected Substack ButtonCreateButton CTA to be stripped');
 		assert.ok(!cleaned.includes('SubscribeWidgetToDOM'), 'Expected Substack SubscribeWidgetToDOM block to be stripped');
 		assert.ok(!cleaned.includes('Thanks for reading Example Substack!'), 'Expected Substack subscribe widget preamble to be stripped');
+	});
+
+	await test('HTML Parser (cleanContent): strips embedded <style> and <link rel="stylesheet"> tags, and Medium Daily Digest footer and preference links', async () => {
+		const mediumHtml = `
+			<style type="text/css">
+				body, table, td, div { height: 100% !important; }
+				.story-card { page-break-after: always; break-after: page; }
+			</style>
+			<link rel="stylesheet" href="https://medium.com/email.css">
+			<div class="story-card">
+				<p>First recommended story snippet from Medium.</p>
+			</div>
+			<div class="story-card">
+				<p>Second recommended story snippet with an <a href="https://medium.com/story-2">article link</a>.</p>
+			</div>
+			<p>You received this email because you opted into the Medium Daily Digest. Adjust your digest preferences</p>
+			<p>Medium, 548 Market St, PMB 42061, San Francisco, CA 94104</p>
+		`;
+		const cleaned = cleanContent(mediumHtml);
+
+		assert.strictEqual((cleaned.match(/<\/?style\b/gi) || []).length, 0, 'Expected no <style> tags in cleaned HTML');
+		assert.strictEqual((cleaned.match(/<\/?link\b/gi) || []).length, 0, 'Expected no <link> tags in cleaned HTML');
+		assert.ok(!cleaned.includes('height: 100%'), 'Expected embedded CSS height rule to be stripped');
+		assert.ok(!cleaned.includes('page-break-after'), 'Expected embedded CSS page-break rule to be stripped');
+		assert.ok(!cleaned.includes('You received this email because you opted into the Medium Daily Digest'), 'Expected Medium subscription notice to be stripped');
+		assert.ok(!cleaned.includes('Adjust your digest preferences'), 'Expected Medium digest preferences prompt to be stripped');
+		assert.ok(!cleaned.includes('548 Market St'), 'Expected Medium 548 Market St address to be stripped');
+		assert.ok(cleaned.includes('First recommended story snippet from Medium.'), 'Expected first story text to be preserved');
+		assert.ok(cleaned.includes('Second recommended story snippet with an <a href="https://medium.com/story-2">article link</a>.'), 'Expected second story text and inline link to be preserved');
+	});
+
+	await test('EPUB Digest Grouping: isMediumDailyDigest accurately identifies digest articles', async () => {
+		assert.strictEqual(
+			isMediumDailyDigest({ id: '1', title: 'Story 1', origin: { title: 'Medium Daily Digest' } }),
+			true,
+			'Expected origin "Medium Daily Digest" to be recognized'
+		);
+		assert.strictEqual(
+			isMediumDailyDigest({ id: '2', title: 'Medium Daily Digest: May 15', origin: { title: 'Medium' } }),
+			true,
+			'Expected title containing "Medium Daily Digest" to be recognized'
+		);
+		assert.strictEqual(
+			isMediumDailyDigest({ id: '3', title: 'Why AI Matters', origin: { title: 'Medium' } }),
+			false,
+			'Regular Medium article should not be classified as daily digest'
+		);
+		assert.strictEqual(
+			isMediumDailyDigest({ id: '4', title: 'Tech Review', origin: { title: 'The Verge' } }),
+			false,
+			'Third-party article should not be classified as daily digest'
+		);
+	});
+
+	await test('EPUB Digest Grouping: groupArticlesForEpub combines multiple Medium Daily Digest articles into a single flowing section and preserves non-digest sections', async () => {
+		const articles: FeedlyArticle[] = [
+			{
+				id: 'verge-1',
+				title: 'New Gadget Released',
+				canonicalUrl: 'https://theverge.com/gadget',
+				origin: { title: 'The Verge' },
+				published: 1700000000000,
+				content: { content: '<p>Verge gadget review content.</p>' },
+			},
+			{
+				id: 'medium-1',
+				title: 'Understanding Async Runtimes',
+				canonicalUrl: 'https://medium.com/story-1',
+				author: 'Jane Doe',
+				origin: { title: 'Medium Daily Digest' },
+				published: 1700000001000,
+				content: { content: '<p>First Medium digest story body.</p>' },
+			},
+			{
+				id: 'ars-1',
+				title: 'Science Breakthrough',
+				canonicalUrl: 'https://arstechnica.com/science',
+				origin: { title: 'Ars Technica' },
+				published: 1700000002000,
+				content: { content: '<p>Ars Technica science article.</p>' },
+			},
+			{
+				id: 'medium-2',
+				title: 'Designing with Micro-Frontends',
+				canonicalUrl: 'https://medium.com/story-2',
+				author: 'John Smith',
+				origin: { title: 'Medium Daily Digest' },
+				published: 1700000003000,
+				content: { content: '<p>Second Medium digest story body.</p>' },
+			},
+		];
+
+		const sections = groupArticlesForEpub(articles);
+
+		// 4 articles input: 2 regular + 2 digest -> 3 sections output (Verge, Grouped Medium Digest, Ars Technica)
+		assert.strictEqual(sections.length, 3, 'Expected 3 sections after grouping digest articles');
+		assert.strictEqual(sections[0].title, 'New Gadget Released', 'First section should be The Verge article');
+		assert.strictEqual(sections[1].title, 'Medium Daily Digest', 'Second section should be the grouped Medium Daily Digest');
+		assert.strictEqual(sections[2].title, 'Science Breakthrough', 'Third section should be the Ars Technica article');
+
+		// Verify grouped section contains both stories flowing sequentially
+		const digestData = sections[1].data;
+		assert.ok(digestData.includes('Understanding Async Runtimes'), 'Expected first digest title in grouped section');
+		assert.ok(digestData.includes('First Medium digest story body.'), 'Expected first digest content in grouped section');
+		assert.ok(digestData.includes('Designing with Micro-Frontends'), 'Expected second digest title in grouped section');
+		assert.ok(digestData.includes('Second Medium digest story body.'), 'Expected second digest content in grouped section');
+		assert.ok(digestData.includes('class="digest-article"'), 'Expected digest-article wrapper in grouped section');
+		assert.ok(digestData.includes('<hr/>'), 'Expected divider between digest articles in grouped section');
+
+		// Verify single digest article case (does not create empty or duplicate sections)
+		const singleDigestSections = groupArticlesForEpub([articles[1]]);
+		assert.strictEqual(singleDigestSections.length, 1, 'Expected 1 section for single digest article');
+		assert.strictEqual(singleDigestSections[0].title, 'Understanding Async Runtimes');
 	});
 
 	if (instapaperToken) {
