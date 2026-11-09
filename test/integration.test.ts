@@ -460,53 +460,104 @@ async function runTests() {
 		console.log('- Skipping Instapaper tests (INSTAPAPER_ACCESS_TOKEN not set)');
 	}
 
+	await test('HTML Parser (cleanContent): verge_torrent.html strips CDATA, WordPress block classes, empty figures, and styles while preserving pullquotes and text', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'verge_torrent.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.ok(!cleaned.includes('<![CDATA['), 'Expected CDATA start to be stripped');
+		assert.ok(!cleaned.includes(']]>'), 'Expected CDATA end to be stripped');
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor|background)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining inline style, bgcolor, or background attributes in cleaned verge_torrent.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/\b(?:wp-block-[a-z0-9-]+|has-[a-z0-9-]+)\b/gi) || []).length,
+			0,
+			'Expected no remaining Gutenberg/WordPress layout classes in cleaned verge_torrent.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/<figure\b[^>]*>/gi) || []).length,
+			0,
+			'Expected no empty figure or pullquote figure containers in cleaned verge_torrent.html'
+		);
+
+		// Verify pullquotes were unwrapped to blockquotes
+		assert.ok(
+			cleaned.includes('<blockquote><p>“I am ethically conflicted about piracy. I often feel guilty about it.”</p></blockquote>'),
+			'Expected pullquote to be unwrapped to clean blockquote'
+		);
+
+		// Verify key article content and links are preserved
+		assert.ok(cleaned.includes('When Jane first heard about'), 'Expected article opening text to be preserved');
+		assert.ok(cleaned.includes('http://www.mlfilms.com/productions/m_and_i'), 'Expected documentary link to be preserved');
+		assert.ok(cleaned.includes('https://en.wikipedia.org/wiki/Lost_film'), 'Expected lost film link to be preserved');
+		assert.ok(cleaned.includes('Marvin acknowledges'), 'Expected article ending text to be preserved');
+	});
+
 	if (feedlyToken) {
 		await test('Feedly API: /v3/tags returns valid boards list', async () => {
-			const res = await requestUrl({
-				url: 'https://cloud.feedly.com/v3/tags',
-				method: 'GET',
-				headers: {
-					Authorization: `Bearer ${feedlyToken}`,
-				},
-			});
-			assert.strictEqual(res.status, 200, 'Expected 200 OK from Feedly /v3/tags');
-			assert.ok(Array.isArray(res.json), 'Expected array of Feedly tags/boards');
-		});
-
-		if (feedlyUserId) {
-			await test('Feedly API: /v3/streams/contents returns valid stream items and cleanContent sanitizes their HTML', async () => {
-				const streamId = encodeURIComponent(`user/${feedlyUserId}/category/global.all`);
+			try {
 				const res = await requestUrl({
-					url: `https://cloud.feedly.com/v3/streams/contents?streamId=${streamId}&count=10`,
+					url: 'https://cloud.feedly.com/v3/tags',
 					method: 'GET',
 					headers: {
 						Authorization: `Bearer ${feedlyToken}`,
 					},
 				});
-				assert.strictEqual(res.status, 200, 'Expected 200 OK from Feedly stream');
-				assert.ok(Array.isArray(res.json?.items), 'Expected items array in Feedly stream response');
+				assert.strictEqual(res.status, 200, 'Expected 200 OK from Feedly /v3/tags');
+				assert.ok(Array.isArray(res.json), 'Expected array of Feedly tags/boards');
+			} catch (e: any) {
+				if (e.message?.includes('401') || e.message?.includes('token expired')) {
+					console.log('- Skipping Feedly API test (FEEDLY_ACCESS_TOKEN expired)');
+					return;
+				}
+				throw e;
+			}
+		});
 
-				for (const item of res.json.items) {
-					const html = item?.content?.content || item?.summary?.content || item?.fullContent;
-					if (!html) continue;
-					const cleaned = cleanContent(html);
-					assert.strictEqual(
-						(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th)\b/gi) || []).length,
-						0,
-						`Expected no remaining table tags in cleaned Feedly article "${item.title}"`
-					);
-					assert.strictEqual(
-						(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
-						0,
-						`Expected no remaining inline style or bgcolor attributes in cleaned Feedly article "${item.title}"`
-					);
-					const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
-					const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
-					assert.strictEqual(
-						openLinks,
-						closeLinks,
-						`Expected balanced <a> and </a> tags in cleaned Feedly article "${item.title}"`
-					);
+		if (feedlyUserId) {
+			await test('Feedly API: /v3/streams/contents returns valid stream items and cleanContent sanitizes their HTML', async () => {
+				try {
+					const streamId = encodeURIComponent(`user/${feedlyUserId}/category/global.all`);
+					const res = await requestUrl({
+						url: `https://cloud.feedly.com/v3/streams/contents?streamId=${streamId}&count=10`,
+						method: 'GET',
+						headers: {
+							Authorization: `Bearer ${feedlyToken}`,
+						},
+					});
+					assert.strictEqual(res.status, 200, 'Expected 200 OK from Feedly stream');
+					assert.ok(Array.isArray(res.json?.items), 'Expected items array in Feedly stream response');
+
+					for (const item of res.json.items) {
+						const html = item?.content?.content || item?.summary?.content || item?.fullContent;
+						if (!html) continue;
+						const cleaned = cleanContent(html);
+						assert.strictEqual(
+							(cleaned.match(/<\/?(table|tbody|thead|tfoot|tr|td|th)\b/gi) || []).length,
+							0,
+							`Expected no remaining table tags in cleaned Feedly article "${item.title}"`
+						);
+						assert.strictEqual(
+							(cleaned.match(/\b(style|bgcolor)\s*=/gi) || []).length,
+							0,
+							`Expected no remaining inline style or bgcolor attributes in cleaned Feedly article "${item.title}"`
+						);
+						const openLinks = (cleaned.match(/<a\b[^>]*>/gi) || []).length;
+						const closeLinks = (cleaned.match(/<\/a>/gi) || []).length;
+						assert.strictEqual(
+							openLinks,
+							closeLinks,
+							`Expected balanced <a> and </a> tags in cleaned Feedly article "${item.title}"`
+						);
+					}
+				} catch (e: any) {
+					if (e.message?.includes('401') || e.message?.includes('token expired')) {
+						console.log('- Skipping Feedly stream test (FEEDLY_ACCESS_TOKEN expired)');
+						return;
+					}
+					throw e;
 				}
 			});
 		}

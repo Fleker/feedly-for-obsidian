@@ -497,6 +497,9 @@ export function cleanContent(html: string) {
 	content = content.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
 	content = content.replace(/<link\b[^>]*\brel=["']?stylesheet["']?[^>]*>/gi, '');
 
+	// Strip XML CDATA wrappers from RSS feed payloads
+	content = content.replace(/<!\[CDATA\[/gi, '').replace(/\]\]>/gi, '');
+
 	// 1. Remove preheaders, display:none blocks, and zero-font hidden spans (e.g. Mailchimp bot honeypots, preview text)
 	content = content.replace(/<(div|span|p|tr|td|a)\b[^>]*\bdisplay\s*:\s*none\b[^>]*>(?:(?!<\1\b)[\s\S])*?<\/\1>/gi, '');
 	content = content.replace(/<span\b[^>]*\bfont-size\s*:\s*0(?:px)?(?:\s*;|\s*["'])[^>]*>[^<]*<\/span>/gi, '');
@@ -516,6 +519,18 @@ export function cleanContent(html: string) {
 			''
 		);
 	}
+
+	// Unwrap WordPress/Gutenberg pullquotes (<figure class="wp-block-pullquote"><blockquote>...</blockquote></figure>)
+	content = content.replace(
+		/<figure\b[^>]*class=["'][^"']*wp-block-pullquote[^"']*["'][^>]*>\s*(<blockquote\b[\s\S]*?<\/blockquote>)\s*<\/figure>/gi,
+		'$1'
+	);
+
+	// Strip WordPress Gutenberg layout and styling classes (e.g. wp-block-*, has-drop-cap, has-alpha-channel-opacity)
+	content = content.replace(/\s+class=(?:"([^"]*)"|'([^']*)')/gi, (match, dVal, sVal) => {
+		const cls = (dVal ?? sVal ?? '').replace(/\b(?:wp-block-[a-z0-9-]+|has-[a-z0-9-]+)\b/gi, '').trim();
+		return cls.length > 0 ? ` class="${cls}"` : '';
+	});
 
 	// 3. Remove "Forwarded this email?", "View in browser", "Read in app", and standalone social/engagement action links
 	//    (Share, Like, Comment, Restack, Subscribe/Subscribed, Read more, Read full story, View page, Unsubscribe)
@@ -560,15 +575,18 @@ export function cleanContent(html: string) {
 	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b[^>]*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
 	content = sanitizeLinks(content);
 
-	// 8. Strip all inline style, bgcolor, and align attributes that cause odd backgrounds or broken e-reader styling
+	// 8. Strip all inline style, bgcolor, background, and align attributes that cause odd backgrounds or broken e-reader styling
 	content = content
-		.replace(/\s*\bstyle\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-		.replace(/\s*\bbgcolor\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-		.replace(/\s*\balign\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+		.replace(/\s*\bstyle\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '')
+		.replace(/\s*\bbgcolor\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '')
+		.replace(/\s*\bbackground\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '')
+		.replace(/\s*\balign\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '');
 
-	// 9. Final cleanup of empty spans, paragraphs, figures, headings, and divs
+	// 9. Final cleanup of empty spans, paragraphs, figures, figcaptions, headings, and divs
 	content = content.replace(/<span\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/span>/gi, '');
-	content = content.replace(/<(p|figure|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
+	for (let i = 0; i < 3; i++) {
+		content = content.replace(/<(p|figure|figcaption|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
+	}
 	for (let i = 0; i < 5; i++) {
 		content = content.replace(/<div\b[^>]*>(?:[\s\u200A-\u200D\uFEFF]|<br\s*\/?>)*<\/div>/gi, '');
 	}
@@ -714,10 +732,13 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
         author: params.author,
         cover: params.cover,
     })
-    bookFile.addCSS(`img { display: none; width: 0px; height: 0px }
+    bookFile.addCSS(`* { background: transparent !important; background-color: transparent !important; }
+img { display: none; width: 0px; height: 0px }
 h1, h2, h3, h4, h5, h6 { page-break-before: auto !important; break-before: auto !important; page-break-after: avoid !important; break-after: avoid !important; }
 .digest-article { margin-bottom: 2em; page-break-inside: auto; break-inside: auto; }
-hr { border: 0; border-top: 1px solid #ccc; margin: 2em 0; page-break-after: auto; break-after: auto; }`)
+hr { border: 0; border-top: 1px solid #ccc; margin: 2em 0; page-break-after: auto; break-after: auto; }
+pre { border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
+blockquote { margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }`)
     let i = 0
     for (const c of params.content) {
         bookFile.addSection(`${++i}. ${c.title}`, c.data)
