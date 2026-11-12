@@ -575,6 +575,13 @@ export function cleanContent(html: string) {
 	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b[^>]*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
 	content = sanitizeLinks(content);
 
+	// Demote h1 and h2 headings to h3 within article content so e-readers (Kindle, Apple Books) and Calibre do not treat article subheadings/titles as chapter/page breaks
+	content = content
+		.replace(/<h1\b([^>]*)>/gi, '<h3$1>')
+		.replace(/<\/h1>/gi, '</h3>')
+		.replace(/<h2\b([^>]*)>/gi, '<h3$1>')
+		.replace(/<\/h2>/gi, '</h3>');
+
 	// 8. Strip all inline style, bgcolor, background, and align attributes that cause odd backgrounds or broken e-reader styling
 	content = content
 		.replace(/\s*\bstyle\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '')
@@ -739,9 +746,9 @@ html, body, div, p, span, blockquote, figure, figcaption, pre, code, hr, a, em, 
     background-color: transparent !important;
 }
 img { display: none; width: 0px; height: 0px }
-h1, h2, h3, h4, h5, h6 { page-break-before: auto !important; break-before: auto !important; page-break-after: avoid !important; break-after: avoid !important; }
-.digest-article { margin-bottom: 2em; page-break-inside: auto; break-inside: auto; }
-hr { border: 0; border-top: 1px solid #ccc; background: transparent !important; background-color: transparent !important; margin: 2em 0; page-break-after: auto; break-after: auto; }
+h1, h2, h3, h4, h5, h6 { page-break-before: avoid !important; break-before: avoid !important; break-before: avoid-page !important; page-break-after: avoid !important; break-after: avoid !important; page-break-inside: avoid !important; break-inside: avoid !important; }
+.digest-article, .digest-story { margin-bottom: 2em; page-break-before: avoid !important; break-before: avoid !important; page-break-inside: avoid !important; break-inside: avoid !important; }
+hr { border: 0; border-top: 1px solid #ccc; background: transparent !important; background-color: transparent !important; margin: 2em 0; page-break-before: avoid !important; page-break-after: avoid !important; break-before: avoid !important; break-after: avoid !important; }
 pre { background: transparent !important; background-color: transparent !important; border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
 blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }`)
     let i = 0

@@ -304,6 +304,32 @@ async function runTests() {
 		assert.ok(cleaned.includes('Second recommended story snippet with an <a href="https://medium.com/story-2">article link</a>.'), 'Expected second story text and inline link to be preserved');
 	});
 
+	await test('HTML Parser (cleanContent): Medium Daily Digest entity demotes internal h1 and h2 story titles to h3 to avoid e-reader page breaks', async () => {
+		const digestHtml = `
+			<h2>Story 1: Understanding Concurrency in Go</h2>
+			<p>Deep dive into Go routines and channels.</p>
+			<h2>Story 2: Microservices at Scale</h2>
+			<p>Lessons learned operating distributed systems.</p>
+			<h1>Bonus Spotlight: Observability 101</h1>
+			<p>Tracing and metrics in production.</p>
+		`;
+		const cleaned = cleanContent(digestHtml);
+
+		assert.strictEqual(
+			(cleaned.match(/<\/?h[12]\b/gi) || []).length,
+			0,
+			'Expected all h1 and h2 tags to be demoted to avoid chapter/page breaks'
+		);
+		assert.strictEqual(
+			(cleaned.match(/<h3\b/gi) || []).length,
+			3,
+			'Expected all 3 story titles to be converted to h3 headings'
+		);
+		assert.ok(cleaned.includes('<h3>Story 1: Understanding Concurrency in Go</h3>'));
+		assert.ok(cleaned.includes('<h3>Story 2: Microservices at Scale</h3>'));
+		assert.ok(cleaned.includes('<h3>Bonus Spotlight: Observability 101</h3>'));
+	});
+
 	await test('EPUB Digest Grouping: isMediumDailyDigest accurately identifies digest articles', async () => {
 		assert.strictEqual(
 			isMediumDailyDigest({ id: '1', title: 'Story 1', origin: { title: 'Medium Daily Digest' } }),
