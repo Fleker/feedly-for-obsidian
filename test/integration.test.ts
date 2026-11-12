@@ -495,6 +495,32 @@ async function runTests() {
 		assert.ok(cleaned.includes('Marvin acknowledges'), 'Expected article ending text to be preserved');
 	});
 
+	await test('HTML Parser (cleanContent): johto.html strips inline styles and empty links while preserving extensive interview blockquotes and article text', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'johto.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor|background)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining inline style, bgcolor, or background attributes in cleaned johto.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/<a\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/a>/gi) || []).length,
+			0,
+			'Expected no empty <a> tags left from stripped <img> tags in cleaned johto.html'
+		);
+
+		// Verify blockquotes are preserved (the interview is formatted as blockquotes)
+		const blockquoteCount = (cleaned.match(/<blockquote>/gi) || []).length;
+		assert.ok(blockquoteCount >= 15, `Expected interview blockquotes to be preserved, found ${blockquoteCount}`);
+
+		// Verify key article content is preserved
+		assert.ok(cleaned.includes('A warm welcome to another issue of Johto Times!'), 'Expected opening greeting to be preserved');
+		assert.ok(cleaned.includes('Katharina, the current webmaster of Bisafans'), 'Expected introduction to Katharina to be preserved');
+		assert.ok(cleaned.includes('Bisaboard'), 'Expected forum references to be preserved');
+		assert.ok(cleaned.includes('It’s always an honor for me to talk about Bisafans'), 'Expected interview responses to be preserved');
+	});
+
 	if (feedlyToken) {
 		await test('Feedly API: /v3/tags returns valid boards list', async () => {
 			try {

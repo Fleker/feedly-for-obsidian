@@ -582,8 +582,9 @@ export function cleanContent(html: string) {
 		.replace(/\s*\bbackground\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '')
 		.replace(/\s*\balign\s*=\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s>]+)/gi, '');
 
-	// 9. Final cleanup of empty spans, paragraphs, figures, figcaptions, headings, and divs
+	// 9. Final cleanup of empty spans, links, paragraphs, figures, figcaptions, headings, and divs
 	content = content.replace(/<span\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/span>/gi, '');
+	content = content.replace(/<a\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/a>/gi, '');
 	for (let i = 0; i < 3; i++) {
 		content = content.replace(/<(p|figure|figcaption|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
 	}
@@ -733,12 +734,16 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
         cover: params.cover,
     })
     bookFile.addCSS(`* { background: transparent !important; background-color: transparent !important; }
+html, body, div, p, span, blockquote, figure, figcaption, pre, code, hr, a, em, strong, ul, ol, li, h1, h2, h3, h4, h5, h6 {
+    background: transparent !important;
+    background-color: transparent !important;
+}
 img { display: none; width: 0px; height: 0px }
 h1, h2, h3, h4, h5, h6 { page-break-before: auto !important; break-before: auto !important; page-break-after: avoid !important; break-after: avoid !important; }
 .digest-article { margin-bottom: 2em; page-break-inside: auto; break-inside: auto; }
-hr { border: 0; border-top: 1px solid #ccc; margin: 2em 0; page-break-after: auto; break-after: auto; }
-pre { border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
-blockquote { margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }`)
+hr { border: 0; border-top: 1px solid #ccc; background: transparent !important; background-color: transparent !important; margin: 2em 0; page-break-after: auto; break-after: auto; }
+pre { background: transparent !important; background-color: transparent !important; border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
+blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }`)
     let i = 0
     for (const c of params.content) {
         bookFile.addSection(`${++i}. ${c.title}`, c.data)
