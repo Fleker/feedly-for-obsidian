@@ -526,9 +526,9 @@ export function cleanContent(html: string) {
 		'$1'
 	);
 
-	// Strip WordPress Gutenberg layout and styling classes (e.g. wp-block-*, has-drop-cap, has-alpha-channel-opacity)
+	// Strip WordPress Gutenberg and Ghost Koenig layout/styling classes (e.g. wp-block-*, has-drop-cap, kg-*)
 	content = content.replace(/\s+class=(?:"([^"]*)"|'([^']*)')/gi, (match, dVal, sVal) => {
-		const cls = (dVal ?? sVal ?? '').replace(/\b(?:wp-block-[a-z0-9-]+|has-[a-z0-9-]+)\b/gi, '').trim();
+		const cls = (dVal ?? sVal ?? '').replace(/\b(?:wp-block-[a-z0-9-]+|has-[a-z0-9-]+|kg-[a-z0-9-]+)\b/gi, '').trim();
 		return cls.length > 0 ? ` class="${cls}"` : '';
 	});
 
@@ -546,6 +546,9 @@ export function cleanContent(html: string) {
 		.replace(/<img\b[\s\S]*?>/gi, '')
 		.replace(/<\/?(?:picture|source)\b[^>]*>/gi, '')
 		.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
+
+	// Unwrap figures containing only captions after images were stripped
+	content = content.replace(/<figure\b[^>]*>\s*<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi, '<p>$1</p>');
 
 	// 5. Flatten all tables and <center> wrappers completely regardless of nesting depth
 	//    We replace table structural tags with nothing, and tr/td/th with divs to keep the flow
@@ -592,11 +595,8 @@ export function cleanContent(html: string) {
 	// 9. Final cleanup of empty spans, links, paragraphs, figures, figcaptions, headings, and divs
 	content = content.replace(/<span\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/span>/gi, '');
 	content = content.replace(/<a\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/a>/gi, '');
-	for (let i = 0; i < 3; i++) {
-		content = content.replace(/<(p|figure|figcaption|h[1-6])\b[^>]*>[\s\u200A-\u200D\uFEFF]*<\/\1>/gi, '');
-	}
 	for (let i = 0; i < 5; i++) {
-		content = content.replace(/<div\b[^>]*>(?:[\s\u200A-\u200D\uFEFF]|<br\s*\/?>)*<\/div>/gi, '');
+		content = content.replace(/<(p|figure|figcaption|h[1-6]|div)\b[^>]*>(?:[\s\u200A-\u200D\uFEFF]|<br\s*\/?>)*<\/\1>/gi, '');
 	}
 
 	return content.trim();
@@ -750,7 +750,8 @@ h1, h2, h3, h4, h5, h6 { page-break-before: avoid !important; break-before: avoi
 .digest-article, .digest-story { margin-bottom: 2em; page-break-before: avoid !important; break-before: avoid !important; page-break-inside: avoid !important; break-inside: avoid !important; }
 hr { border: 0; border-top: 1px solid #ccc; background: transparent !important; background-color: transparent !important; margin: 2em 0; page-break-before: avoid !important; page-break-after: avoid !important; break-before: avoid !important; break-after: avoid !important; }
 pre { background: transparent !important; background-color: transparent !important; border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
-blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }`)
+blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }
+figure, figcaption { background: transparent !important; background-color: transparent !important; border: none !important; margin: 0.5em 0; padding: 0; }`)
     let i = 0
     for (const c of params.content) {
         bookFile.addSection(`${++i}. ${c.title}`, c.data)

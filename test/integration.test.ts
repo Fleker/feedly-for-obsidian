@@ -547,6 +547,34 @@ async function runTests() {
 		assert.ok(cleaned.includes('It’s always an honor for me to talk about Bisafans'), 'Expected interview responses to be preserved');
 	});
 
+	await test('HTML Parser (cleanContent): scifi_art.html strips Ghost Koenig cards, empty gallery cards, and styles while unwrapping image captions', async () => {
+		const raw = fs.readFileSync(path.resolve(process.cwd(), 'scifi_art.html'), 'utf8');
+		const cleaned = cleanContent(raw);
+
+		assert.strictEqual(
+			(cleaned.match(/\b(style|bgcolor|background)\s*=/gi) || []).length,
+			0,
+			'Expected no remaining inline style, bgcolor, or background attributes in cleaned scifi_art.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/\bkg-[a-z0-9-]+\b/gi) || []).length,
+			0,
+			'Expected no remaining Ghost Koenig card classes in cleaned scifi_art.html'
+		);
+		assert.strictEqual(
+			(cleaned.match(/<figure\b/gi) || []).length,
+			0,
+			'Expected no remaining figure tags (empty gallery cards removed, single captions unwrapped) in cleaned scifi_art.html'
+		);
+
+		// Verify key article content and captions are preserved
+		assert.ok(cleaned.includes('December 1983 cover art'), 'Expected Computer Gaming World cover reference to be preserved');
+		assert.ok(cleaned.includes('Via tech illustration curator'), 'Expected unwrapped image caption to be preserved');
+		assert.ok(cleaned.includes('Lookcaitlin'), 'Expected caption link text to be preserved');
+		assert.ok(cleaned.includes('Dalek'), 'Expected Doctor Who Dalek discussion to be preserved');
+		assert.ok(cleaned.includes('What&#x2019;s Opera, Doc?'), 'Expected blockquote content to be preserved');
+	});
+
 	if (feedlyToken) {
 		await test('Feedly API: /v3/tags returns valid boards list', async () => {
 			try {
