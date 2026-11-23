@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as assert from 'assert';
 import { InstapaperClient } from '../instapaper';
-import { cleanContent, isMediumDailyDigest, groupArticlesForEpub, FeedlyArticle } from '../main';
+import { cleanContent, formatInstapaperArticle, isMediumDailyDigest, groupArticlesForEpub, FeedlyArticle } from '../main';
 import { requestUrl } from 'obsidian';
 
 function loadDotEnv() {
@@ -481,10 +481,166 @@ async function runTests() {
 			const html = await client.getText(sampleBookmark!.id);
 			assert.strictEqual(typeof html, 'string', 'Expected parsed HTML string from getText()');
 			assert.ok(html!.length > 0, 'Expected non-empty HTML body from getText()');
+
+			const formatted = formatInstapaperArticle(sampleBookmark!, parsed);
+			assert.ok(formatted !== null, 'Expected formatInstapaperArticle() to produce non-null EPUB section');
+			assert.strictEqual(
+				(formatted!.data.match(/<\/?(?:html|body|section|article|main|header|footer|aside|nav|figure|figcaption|fig|table|img|h1)\b/gi) || []).length,
+				0,
+				'Expected formatted Instapaper section to strip document/section/figure/table/img/h1 tags that cause EPUB page breaks'
+			);
+			assert.strictEqual(
+				(formatted!.data.match(/<h2\b/gi) || []).length,
+				1,
+				'Expected only the single top-level <h2> article header in formatted Instapaper section'
+			);
 		});
 	} else {
 		console.log('- Skipping Instapaper tests (INSTAPAPER_ACCESS_TOKEN not set)');
 	}
+
+	await test('Instapaper EPUB Output (formatInstapaperArticle & cleanContent): sanitizes Instapaper HTML wrappers, sectioning tags, h1/h2 headings, classless figures, templates, and XML metadata', async () => {
+		const instapaperParsedHtml = `<html><body>
+			<main>
+				<section>
+					<header><h1>Building on ATProto</h1></header>
+					<p>Opening paragraph from an Instapaper-parsed essay.</p>
+					<figure><blockquote><p>“When I look at the towers, all I feel is a hundred thousand eyes on my back.”</p></blockquote></figure>
+				</section>
+				<section>
+					<header><h2><span>Part I: </span>The Commanding Heights</h2></header>
+					<figure><a href="https://example.com/img/chart.jpg"><picture><source/><img src="https://example.com/img/chart-700.jpg"/></picture></a><figcaption><span>Standard Oil’s trunk pipelines, 1906.</span></figcaption></figure>
+					<figure><div><div><img src="https://example.com/img/photo.png"/></div></div><figcaption><div>Sophie Green</div><div>Caption with block divs inside figcaption.</div></figcaption></figure>
+					<fig><p><b>FIG 1.</b> Architecture diagram from IEEE paper.</p></fig>
+					<p>Body text following figures and subheadings.</p>
+					<template><div>Hidden YouTube subscribe popup template</div></template>
+				</section>
+				<footer><h3>About the Author</h3><p>Author bio paragraph.</p></footer>
+			</main>
+		</body></html>`;
+
+		const formatted = formatInstapaperArticle(
+			{
+				id: 2056985756,
+				url: 'https://example.com/article?utm_source=substack&utm_medium=email',
+				title: '<i>MCTC:</i> Building & Scaling on ATProto',
+				description: null,
+				image: null,
+				progress: { percentage: 0, timestamp: 0 },
+				liked: false,
+				archived: false,
+				time: 1700000000,
+				pubtime: 1700003600,
+				author: 'Jane & John: Editors',
+				folder_id: null,
+				tags: [],
+				private_source: null,
+				category: 0,
+			},
+			{
+				metadata: {
+					title: 'Building & Scaling on ATProto',
+					author: { name: 'Jane & John: Editors', url: null },
+					pubtime: 1700003600,
+					thumbnail: null,
+					description: null,
+					private_source: null,
+					category: 0,
+				},
+				content: {
+					body: instapaperParsedHtml,
+					images: [],
+					words: 120,
+					paywalled: false,
+					direction: 'ltr',
+				},
+			}
+		);
+
+		assert.ok(formatted !== null, 'Expected formatted Instapaper section to be returned');
+		assert.strictEqual(formatted!.title, 'MCTC: Building & Scaling on ATProto', 'Expected inline HTML tags stripped from TOC title');
+
+		const data = formatted!.data;
+		// Only the single outer <h2>${title}</h2> should exist; internal h1/h2 headings must be demoted to h3
+		assert.strictEqual((data.match(/<h1\b/gi) || []).length, 0, 'Expected zero <h1> tags in formatted Instapaper output');
+		assert.strictEqual((data.match(/<h2\b/gi) || []).length, 1, 'Expected only the 1 top-level <h2> article title');
+		assert.ok(data.includes('<h3>Building on ATProto</h3>'), 'Expected internal <h1> to be demoted to <h3>');
+		assert.ok(data.includes('<h3><span>Part I: </span>The Commanding Heights</h3>'), 'Expected internal <h2> to be demoted to <h3>');
+
+		// Verify no nested html/body, HTML5 sectioning tags, figure/fig/figcaption, img, or template tags remain
+		assert.strictEqual(
+			(data.match(/<\/?(?:html|body|main|section|article|header|footer|aside|nav|figure|figcaption|fig|img|picture|source|template)\b/gi) || []).length,
+			0,
+			'Expected all document/sectioning/figure/image/template tags to be normalized or stripped'
+		);
+
+		// Verify classless pullquote, captions, and valid XHTML nesting (no <p><div>)
+		assert.ok(
+			data.includes('<blockquote><p>“When I look at the towers, all I feel is a hundred thousand eyes on my back.”</p></blockquote>'),
+			'Expected classless Instapaper pullquote figure to be unwrapped cleanly'
+		);
+		assert.ok(data.includes('<p><span>Standard Oil’s trunk pipelines, 1906.</span></p>'), 'Expected linked-image figure caption to be preserved as <p>');
+		assert.ok(!/<p\b[^>]*>\s*<div\b/i.test(data), 'Expected block-containing figcaption not to produce invalid <p><div> nesting');
+		assert.ok(data.includes('Caption with block divs inside figcaption.'), 'Expected block-containing figcaption text to be preserved');
+		assert.ok(data.includes('Architecture diagram from IEEE paper.'), 'Expected <fig> caption text to be preserved');
+		assert.ok(!data.includes('Hidden YouTube subscribe popup template'), 'Expected <template> content to be stripped');
+
+		// Verify XML escaping in frontmatter metadata and title
+		assert.ok(data.includes('<h2>MCTC: Building &amp; Scaling on ATProto</h2>'), 'Expected escaped &amp; in <h2> header');
+		assert.ok(data.includes('url: https://example.com/article?utm_source=substack&amp;utm_medium=email'), 'Expected escaped &amp; in frontmatter URL');
+		assert.ok(data.includes('author: Jane &amp; John -  Editors'), 'Expected sanitized and XML-escaped author in frontmatter');
+
+		// Verify empty/image-only Instapaper body returns null rather than rendering a blank page
+		const emptyFormatted = formatInstapaperArticle(
+			{
+				id: 1,
+				url: 'https://example.com/empty',
+				title: 'Image Only',
+				description: null,
+				image: null,
+				progress: { percentage: 0, timestamp: 0 },
+				liked: false,
+				archived: false,
+				time: 1700000000,
+				pubtime: null,
+				author: null,
+				folder_id: null,
+				tags: [],
+				private_source: null,
+				category: 0,
+			},
+			{
+				metadata: { title: 'Image Only', author: null, pubtime: null, thumbnail: null, description: null, private_source: null, category: 0 },
+				content: { body: '<div><figure><img src="https://example.com/only.jpg"/></figure></div>', images: [], words: 0, paywalled: false, direction: null },
+			}
+		);
+		assert.strictEqual(emptyFormatted, null, 'Expected image-only/empty Instapaper article to be skipped');
+	});
+
+	await test('HTML Parser (cleanContent): strips raw image URLs from quote-containing <img> attributes, auto-linked image URLs, bare image URLs, and escaped &lt;img&gt; tags while preserving article/PDF links', async () => {
+		const rawImageLeakHtml = `
+			<p>Lead paragraph before images.</p>
+			<img alt="Chart: AI CapEx > Cloud Revenue" data-caption="Photo by <em>Jane Doe</em>" src="https://platform.theverge.com/wp-content/uploads/sites/2/2026/11/hero.jpg?quality=90" />
+			<p><a href="https://substackcdn.com/image/fetch/w_1456,c_limit,f_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fchart.png">https://substackcdn.com/image/fetch/w_1456,c_limit,f_auto/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fchart.png</a></p>
+			<p><a href="https://preview.redd.it/xyz123.jpg?width=1080&amp;format=pjpg">https://preview.redd.it/xyz123.jpg?width=1080&amp;format=pjpg</a></p>
+			<p>https://pbs.twimg.com/media/AbCdEfG?format=jpg&amp;name=large</p>
+			<p>https://example.com/assets/diagram.webp</p>
+			<p>&lt;img src="https://example.com/escaped-rss-image.png" alt="Escaped" /&gt;</p>
+			<p><a href="/web/images/Issue14.jpg"><em>Caption wrapped in image link</em></a></p>
+			<p>Read the <a href="https://example.com/uploads/report.pdf">full PDF report</a> or visit <a href="https://github.com/O-EDA/LightSim">https://github.com/O-EDA/LightSim</a>.</p>
+		`;
+		const cleaned = cleanContent(rawImageLeakHtml);
+
+		assert.ok(!cleaned.includes('platform.theverge.com'), 'Expected <img> with ">" inside alt/data-caption not to leak trailing src="..." URL');
+		assert.ok(!cleaned.includes('substackcdn.com/image/fetch'), 'Expected auto-linked Substack CDN image URL to be stripped');
+		assert.ok(!cleaned.includes('preview.redd.it'), 'Expected auto-linked Reddit preview image URL to be stripped');
+		assert.ok(!cleaned.includes('pbs.twimg.com/media'), 'Expected bare Twitter/X media image URL to be stripped');
+		assert.ok(!cleaned.includes('diagram.webp'), 'Expected bare .webp image URL paragraph to be stripped');
+		assert.ok(!cleaned.includes('escaped-rss-image.png'), 'Expected HTML-escaped &lt;img&gt; tag to be stripped');
+		assert.ok(cleaned.includes('<p><em>Caption wrapped in image link</em></p>'), 'Expected caption text inside image-file href to be unwrapped and preserved');
+		assert.ok(cleaned.includes('<a href="https://example.com/uploads/report.pdf">full PDF report</a>'), 'Expected non-image .pdf link to be preserved');
+		assert.ok(cleaned.includes('<a href="https://github.com/O-EDA/LightSim">https://github.com/O-EDA/LightSim</a>'), 'Expected non-image GitHub URL link to be preserved');
+	});
 
 	await test('HTML Parser (cleanContent): verge_torrent.html strips CDATA, WordPress block classes, empty figures, and styles while preserving pullquotes and text', async () => {
 		const raw = fs.readFileSync(path.resolve(process.cwd(), 'verge_torrent.html'), 'utf8');

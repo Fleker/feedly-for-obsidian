@@ -1,5 +1,5 @@
 import { App, FileManager, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl } from 'obsidian';
-import { InstapaperBookmark, InstapaperClient } from './instapaper';
+import { InstapaperBookmark, InstapaperClient, InstapaperParsedResult } from './instapaper';
 import nodepub, { NodepubFile } from 'nodepub';
 import JSZip from 'jszip';
 
@@ -314,6 +314,50 @@ async function getSavedLater(accessToken: string, userId: string) {
     return articles
 }
 
+function escapeXmlText(text: string = ''): string {
+	return text
+		.replace(/&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;');
+}
+
+export function formatInstapaperArticle(
+	b: InstapaperBookmark,
+	parsed: InstapaperParsedResult | null,
+): { title: string; author: string; data: string; css: string } | null {
+	const rawContent = parsed?.content?.body ?? null;
+	if (rawContent === null) return null;
+
+	const content = cleanContent(rawContent);
+	if (!content) return null;
+
+	const cleanTitle = (b.title ?? parsed?.metadata?.title ?? 'Untitled').replace(/<[^>]*>/g, '').trim() || 'Untitled';
+	const escapedTitle = escapeXmlText(cleanTitle);
+	const escapedUrl = b.url ? escapeXmlText(b.url) : '';
+	const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown';
+	const pubtime = b.pubtime ?? parsed?.metadata?.pubtime;
+	const pubDate = pubtime ? dateToJournal(new Date(pubtime * 1000)) : undefined;
+	const rawAuthor = b.author ?? parsed?.metadata?.author?.name;
+	const author = rawAuthor ?? 'Unknown';
+	const data = `<h2>${escapedTitle}</h2>
+<pre>---${escapedUrl ? `
+url: ${escapedUrl}` : ''}
+instapaperUrl: https://www.instapaper.com/read/${b.id}
+title: ${escapedTitle}
+saveDate: ${saveDate}${pubDate ? `
+pubDate: ${pubDate}` : ''}${rawAuthor ? `
+author: ${escapeXmlText(sanitizeFrontmatter(rawAuthor))}` : ''}
+---</pre>
+<div>${content}</div>`;
+
+	return {
+		title: cleanTitle,
+		author,
+		data,
+		css: 'img { display: none; width: 0px; height: 0px; }',
+	};
+}
+
 async function getInstapaperArticles(
 	accessToken: string,
 	limit: number = 25,
@@ -365,35 +409,15 @@ async function getInstapaperArticles(
 		while (currentIndex < validBookmarks.length) {
 			const index = currentIndex++
 			const b = validBookmarks[index]
-			const { id, url } = b
+			const { id } = b
 			const title = b.title ?? 'Untitled'
 			try {
 				const parsed = await client.parseBookmark(id)
-				const content = parsed?.content?.body ?? null
-				if (content === null) {
+				const formatted = formatInstapaperArticle(b, parsed)
+				if (formatted === null) {
 					skippedCount++
 				} else {
-					const saveDate = b.time ? dateToJournal(new Date(b.time * 1000)) : 'Unknown'
-					const pubtime = b.pubtime ?? parsed?.metadata?.pubtime
-					const pubDate = pubtime ? dateToJournal(new Date(pubtime * 1000)) : undefined
-					const rawAuthor = b.author ?? parsed?.metadata?.author?.name
-					const author = rawAuthor ?? 'Unknown'
-					const data = `<h2>${title}</h2>
-<pre>---
-url: ${url}
-instapaperUrl: https://www.instapaper.com/read/${id}
-title: ${title}
-saveDate: ${saveDate}${pubDate ? `
-pubDate: ${pubDate}` : ''}${rawAuthor ? `
-author: ${sanitizeFrontmatter(rawAuthor)}` : ''}
----</pre>
-<div>${content}</div>`
-					results[index] = { 
-						title, 
-						author, 
-						data, 
-						css: "img { display: none; width: 0px; height: 0px; }" 
-					}
+					results[index] = formatted
 				}
 			} catch (e) {
 				const errorMsg = e.message || e.toString()
@@ -427,8 +451,17 @@ author: ${sanitizeFrontmatter(rawAuthor)}` : ''}
 	return out
 }
 
+const RAW_IMAGE_URL_REGEX = /^(?:https?:)?\/\/(?:(?:substackcdn\.com\/image\/fetch\/|pbs\.twimg\.com\/(?:media|profile_images|amplify_video_thumb)\/|(?:i|preview|external-preview)\.redd\.it\/|i\.imgur\.com\/|miro\.medium\.com\/(?:max|v2\/resize)|images\.unsplash\.com\/photo-|images\.squarespace-cdn\.com\/content\/|cdn\.theatlantic\.com\/thumbor\/)[^\s<>"']*|[^\s<>"'?#]+\.(?:jpe?g|png|gif|webp|avif|svg|bmp|tiff?|ico)(?:[?#][^\s<>"']*)?)$/i;
+
+function isImageHref(href: string): boolean {
+	const trimmed = href.trim();
+	if (!trimmed) return false;
+	if (RAW_IMAGE_URL_REGEX.test(trimmed)) return true;
+	return /^\/[^\s<>"'?#]*\.(?:jpe?g|png|gif|webp|avif|svg|bmp|tiff?)(?:[?#][^\s<>"']*)?$/i.test(trimmed);
+}
+
 function sanitizeLinks(html: string): string {
-	const tokenRegex = /<\/?a\b[^>]*>/gi;
+	const tokenRegex = /<\/?a\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi;
 	const tokens: { tag: string; start: number; end: number; isClose: boolean }[] = [];
 	let match: RegExpExecArray | null;
 	while ((match = tokenRegex.exec(html)) !== null) {
@@ -468,12 +501,15 @@ function sanitizeLinks(html: string): string {
 
 		const inner = html.slice(token.end, next.start);
 		const textOnly = inner.replace(/<[^>]*>/g, '').replace(/[\s\u200A-\u200D\uFEFF]+/g, '');
-		if (textOnly.length === 0) {
-			// Drop empty links (e.g. links that only contained an <img>)
+		const hrefMatch = token.tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+		const href = hrefMatch ? (hrefMatch[1] ?? hrefMatch[2] ?? hrefMatch[3] ?? '') : '';
+
+		if (textOnly.length === 0 || RAW_IMAGE_URL_REGEX.test(textOnly)) {
+			// Drop empty links (e.g. links that only contained an <img>) and auto-linked raw image URLs
 			cursor = next.end;
 			i += 2;
-		} else if (blockTagRegex.test(inner) || nonBlueLinkStyleRegex.test(token.tag)) {
-			// Unwrap <a> tags that wrap block-level elements or are styled as non-blue block/text cards
+		} else if (blockTagRegex.test(inner) || nonBlueLinkStyleRegex.test(token.tag) || isImageHref(href)) {
+			// Unwrap <a> tags that wrap block-level elements, non-blue cards, or captions linked directly to an image file
 			result += inner;
 			cursor = next.end;
 			i += 2;
@@ -493,9 +529,14 @@ export function cleanContent(html: string) {
 
 	let content = html;
 
-	// 0. Remove <style> and <link rel="stylesheet"> tags so embedded CSS from email newsletters cannot leak into EPUB or force page breaks
+	// 0. Remove <style>, <script>, <template>, <head>, and <link rel="stylesheet"> tags, plus nested <html>/<body> wrappers
+	//    so embedded CSS/templates or full-document wrappers (e.g. from Instapaper /parse) cannot leak into EPUB or force page breaks
 	content = content.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+	content = content.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+	content = content.replace(/<template\b[^>]*>[\s\S]*?<\/template>/gi, '');
+	content = content.replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '');
 	content = content.replace(/<link\b[^>]*\brel=["']?stylesheet["']?[^>]*>/gi, '');
+	content = content.replace(/<\/?(?:html|body)\b[^>]*>/gi, '');
 
 	// Strip XML CDATA wrappers from RSS feed payloads
 	content = content.replace(/<!\[CDATA\[/gi, '').replace(/\]\]>/gi, '');
@@ -520,9 +561,9 @@ export function cleanContent(html: string) {
 		);
 	}
 
-	// Unwrap WordPress/Gutenberg pullquotes (<figure class="wp-block-pullquote"><blockquote>...</blockquote></figure>)
+	// Unwrap pullquote figures (<figure ...><blockquote>...</blockquote></figure>), including classless figures from Instapaper
 	content = content.replace(
-		/<figure\b[^>]*class=["'][^"']*wp-block-pullquote[^"']*["'][^>]*>\s*(<blockquote\b[\s\S]*?<\/blockquote>)\s*<\/figure>/gi,
+		/<figure\b[^>]*>\s*(<blockquote\b[\s\S]*?<\/blockquote>)\s*<\/figure>/gi,
 		'$1'
 	);
 
@@ -541,21 +582,24 @@ export function cleanContent(html: string) {
 		''
 	);
 
-	// 4. Remove all images, picture/source wrappers, and inline SVGs
+	// 4. Remove all images (quote-aware so '>' inside alt/data-caption cannot leak trailing src="..." URLs as raw text),
+	//    HTML-escaped &lt;img ...&gt; tags, picture/source/noscript wrappers, and inline SVGs
 	content = content
-		.replace(/<img\b[\s\S]*?>/gi, '')
-		.replace(/<\/?(?:picture|source)\b[^>]*>/gi, '')
+		.replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, '')
+		.replace(/<img\b[^>]*>/gi, '')
+		.replace(/&lt;img\b(?:(?!&gt;)[\s\S])*?&gt;/gi, '')
+		.replace(/<\/?(?:picture|source|noscript)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, '')
 		.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
 
-	// Unwrap figures containing only captions after images were stripped
-	content = content.replace(/<figure\b[^>]*>\s*<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>\s*<\/figure>/gi, '<p>$1</p>');
-
-	// 5. Flatten all tables and <center> wrappers completely regardless of nesting depth
-	//    We replace table structural tags with nothing, and tr/td/th with divs to keep the flow
+	// 5. Flatten all tables, <center>, and HTML5/academic sectioning wrappers completely regardless of nesting depth
+	//    We replace structural/nowrap wrappers with nothing, and tr/td/th + section/article/header/footer/main/aside/nav with divs
+	//    so e-readers and EPUB converters never treat <section> or <article> boundaries as chapter/page breaks
 	content = content
-		.replace(/<\/?(table|tbody|thead|tfoot|colgroup|col|center)\b[^>]*>/gi, '')
-		.replace(/<(tr|td|th)\b[^>]*>/gi, '<div>')
-		.replace(/<\/(tr|td|th)>/gi, '</div>');
+		.replace(/<\/?(table|tbody|thead|tfoot|colgroup|col|center|nobr|inline-formula|tex-math|mjx-container|mjx-assistive-mml|response)\b[^>]*>/gi, '')
+		.replace(/<(tr|td|th|section|article|main|header|footer|aside|nav|disp-formula|accesstype)\b[^>]*>/gi, '<div>')
+		.replace(/<\/(tr|td|th|section|article|main|header|footer|aside|nav|disp-formula|accesstype)>/gi, '</div>')
+		.replace(/<monospace\b[^>]*>/gi, '<code>')
+		.replace(/<\/monospace>/gi, '</code>');
 
 	// 6. Remove templated newsletter subscribe/forwarded banners and footer boilerplate
 	//    (Bloomberg/Patreon/Substack/Inquirer/Mailchimp copyright, mailing addresses, unsubscribe & app download footers)
@@ -575,8 +619,24 @@ export function cleanContent(html: string) {
 		);
 
 	// 7. Unwrap heading-wrapped links and sanitize links (before stripping style so non-blue card/title links are detected)
-	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b[^>]*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
+	content = content.replace(/(<h[1-6]\b[^>]*>\s*)<a\b(?:[^>"']|"[^"]*"|'[^']*')*>([\s\S]*?)<\/a>(\s*<\/h[1-6]>)/gi, '$1$2$3');
 	content = sanitizeLinks(content);
+
+	// Strip standalone bare image URLs in text nodes (outside HTML tags) so raw CDN/image URLs are not rendered in prose
+	content = content.replace(
+		/(^|>)\s*(?:https?:\/\/(?:(?:substackcdn\.com\/image\/fetch\/|pbs\.twimg\.com\/(?:media|profile_images|amplify_video_thumb)\/|(?:i|preview|external-preview)\.redd\.it\/|i\.imgur\.com\/|miro\.medium\.com\/(?:max|v2\/resize)|images\.unsplash\.com\/photo-|images\.squarespace-cdn\.com\/content\/|cdn\.theatlantic\.com\/thumbor\/)[^\s<>"']+|[^\s<>"'?#]+\.(?:jpe?g|png|gif|webp|avif|svg|bmp|tiff?)(?:[?#][^\s<>"']*)?))\s*(?=<|$)/gi,
+		'$1'
+	);
+
+	// Convert non-empty <figcaption> elements to <p> (or <div> if they already contain block elements) and unwrap all <figure>/<fig> containers
+	// so e-readers do not apply figure keep-together page breaks
+	content = content.replace(/<figcaption\b[^>]*>([\s\S]*?)<\/figcaption>/gi, (_match, inner: string) => {
+		const textOnly = inner.replace(/<[^>]*>/g, '').replace(/[\s\u200A-\u200D\uFEFF]+/g, '');
+		if (textOnly.length === 0) return '';
+		const hasBlock = /<\/?(?:div|p|ul|ol|li|blockquote|h[1-6]|pre)\b/i.test(inner);
+		return hasBlock ? `<div>${inner}</div>` : `<p>${inner}</p>`;
+	});
+	content = content.replace(/<\/?(?:figure|fig)\b[^>]*>/gi, '');
 
 	// Demote h1 and h2 headings to h3 within article content so e-readers (Kindle, Apple Books) and Calibre do not treat article subheadings/titles as chapter/page breaks
 	content = content
@@ -584,6 +644,11 @@ export function cleanContent(html: string) {
 		.replace(/<\/h1>/gi, '</h3>')
 		.replace(/<h2\b([^>]*)>/gi, '<h3$1>')
 		.replace(/<\/h2>/gi, '</h3>');
+
+	// Normalize void <br> and <hr> tags to self-closing XHTML 1.1 syntax
+	content = content
+		.replace(/<br\b[^>]*>/gi, '<br/>')
+		.replace(/<hr\b[^>]*>/gi, '<hr/>');
 
 	// 8. Strip all inline style, bgcolor, background, and align attributes that cause odd backgrounds or broken e-reader styling
 	content = content
@@ -741,17 +806,18 @@ async function generateEpub(params: GenerateEpubParams): Promise<string> {
         cover: params.cover,
     })
     bookFile.addCSS(`* { background: transparent !important; background-color: transparent !important; }
-html, body, div, p, span, blockquote, figure, figcaption, pre, code, hr, a, em, strong, ul, ol, li, h1, h2, h3, h4, h5, h6 {
+html, body, div, section, article, main, header, footer, aside, nav, p, span, blockquote, figure, figcaption, pre, code, hr, a, em, strong, ul, ol, li, h1, h2, h3, h4, h5, h6 {
     background: transparent !important;
     background-color: transparent !important;
 }
 img { display: none; width: 0px; height: 0px }
+section, article, main, header, footer, aside, nav { display: block; page-break-before: avoid !important; break-before: avoid !important; break-before: avoid-page !important; page-break-after: avoid !important; break-after: avoid !important; }
 h1, h2, h3, h4, h5, h6 { page-break-before: avoid !important; break-before: avoid !important; break-before: avoid-page !important; page-break-after: avoid !important; break-after: avoid !important; page-break-inside: avoid !important; break-inside: avoid !important; }
 .digest-article, .digest-story { margin-bottom: 2em; page-break-before: avoid !important; break-before: avoid !important; page-break-inside: avoid !important; break-inside: avoid !important; }
 hr { border: 0; border-top: 1px solid #ccc; background: transparent !important; background-color: transparent !important; margin: 2em 0; page-break-before: avoid !important; page-break-after: avoid !important; break-before: avoid !important; break-after: avoid !important; }
-pre { background: transparent !important; background-color: transparent !important; border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; }
-blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; }
-figure, figcaption { background: transparent !important; background-color: transparent !important; border: none !important; margin: 0.5em 0; padding: 0; }`)
+pre { background: transparent !important; background-color: transparent !important; border: 1px solid #ccc; padding: 0.5em; white-space: pre-wrap; word-wrap: break-word; page-break-inside: auto !important; break-inside: auto !important; }
+blockquote { background: transparent !important; background-color: transparent !important; margin: 1em 0; padding: 0.5em 1em; border-left: 3px solid #ccc; page-break-inside: auto !important; break-inside: auto !important; }
+figure, figcaption { background: transparent !important; background-color: transparent !important; border: none !important; margin: 0.5em 0; padding: 0; page-break-inside: auto !important; break-inside: auto !important; }`)
     let i = 0
     for (const c of params.content) {
         bookFile.addSection(`${++i}. ${c.title}`, c.data)
